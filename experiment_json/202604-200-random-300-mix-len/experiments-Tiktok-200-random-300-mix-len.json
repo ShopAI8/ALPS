@@ -34,8 +34,8 @@
                   "acorn_efs_step_fast": 500
                },
                "algorithms": [
-                  "SODA",
-                  "SODA+",
+                  "ALPS",
+                  "ALPS+",
                   "pre-filter",
                   "Milvus-IVF",
                   "Milvus-HNSW"
@@ -77,7 +77,7 @@
                   "acorn_efs_step_fast": 500
                },
                "algorithms": [
-                  "UNG+",
+                  "TFNG",
                   "UNG-nTfalse"
                ]
             }
@@ -130,8 +130,8 @@
                   "acorn_efs_step_fast": 500
                },
                "algorithms": [
-                  "SODA",
-                  "SODA+",
+                  "ALPS",
+                  "ALPS+",
                   "pre-filter",
                   "Milvus-IVF",
                   "Milvus-HNSW",
@@ -148,8 +148,8 @@
                   "acorn_efs_step_fast": 500
                },
                "algorithms": [
-                  "SODA",
-                  "SODA+",
+                  "ALPS",
+                  "ALPS+",
                   "pre-filter",
                   "Milvus-IVF",
                   "Milvus-HNSW",
@@ -166,8 +166,8 @@
                   "acorn_efs_step_fast": 500
                },
                "algorithms": [
-                  "SODA",
-                  "SODA+",
+                  "ALPS",
+                  "ALPS+",
                   "pre-filter",
                   "Milvus-IVF",
                   "Milvus-HNSW",
@@ -184,8 +184,8 @@
                   "acorn_efs_step_fast": 500
                },
                "algorithms": [
-                  "SODA",
-                  "SODA+",
+                  "ALPS",
+                  "ALPS+",
                   "pre-filter",
                   "Milvus-IVF",
                   "Milvus-HNSW",
@@ -230,7 +230,7 @@
                   "acorn_efs_step_fast": 500
                },
                "algorithms": [
-                  "UNG+",
+                  "TFNG",
                   "UNG-nTfalse"
                ]
             },
@@ -242,7 +242,7 @@
                   "acorn_efs_step_fast": 500
                },
                "algorithms": [
-                  "UNG+",
+                  "TFNG",
                   "UNG-nTfalse"
                ]
             },
@@ -254,7 +254,7 @@
                   "acorn_efs_step_fast": 500
                },
                "algorithms": [
-                  "UNG+",
+                  "TFNG",
                   "UNG-nTfalse"
                ]
             },
@@ -266,7 +266,7 @@
                   "acorn_efs_step_fast": 500
                },
                "algorithms": [
-                  "UNG+",
+                  "TFNG",
                   "UNG-nTfalse"
                ]
             }

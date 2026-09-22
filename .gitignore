@@ -1,9 +1,15 @@
 .vscode/
 /UNG/build/
+UNG/codes/build/
 /NaviX/build/
 /ACORN/build_local/
 /knowhere/build/
 /knowhere/**/build/
 Dockerfile
 FAVOR/build/
+FAVOR/data/
 FAVOR/tmp/
+docs/
+DataTools/
+tools/
+log/

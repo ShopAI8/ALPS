@@ -10,11 +10,37 @@ endif()
 if(ENABLE_RABITQ)
     list(APPEND CPP_SOURCES rabitq_side_index.cpp)
 endif()
-# add_library(${PROJECT_NAME} ${CPP_SOURCES} ${ROARING_LIB})
+
+# Curator sources — compiled directly into libANNS
+list(APPEND CPP_SOURCES
+    ../curator/curator_wrapper.cpp
+    ../curator/faiss/MultiTenantIndex.cpp
+    ../curator/faiss/MultiTenantIndexIVF.cpp
+    ../curator/faiss/MultiTenantIndexIVFFlat.cpp
+    ../curator/faiss/MultiTenantIndexIVFHierarchical.cpp
+    ../curator/faiss/complex_predicate.cpp
+    ../curator/faiss/impl/IDSelector.cpp
+)
+
 add_library(${PROJECT_NAME} ${CPP_SOURCES})
 target_link_libraries(${PROJECT_NAME} PRIVATE faiss ${ROARING_LIB})
-target_link_libraries(${PROJECT_NAME} PUBLIC ${KNOWHERE_LIBRARY})
+if(ENABLE_KNOWHERE_MILVUS_BASELINE)
+    target_link_libraries(${PROJECT_NAME} PUBLIC ${KNOWHERE_LIBRARY})
+endif()
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../FAVOR/include)
+
+# Curator include paths (PRIVATE — only for Curator .cpp files, not propagated)
+# curator/            → for curator_wrapper.h
+# curator/faiss/      → for local Curator headers (MultiTenantIndex.h etc.)
+# NaviX/              → for <faiss_navix/XXX.h> (NaviX FAISS headers)
+# NaviX/faiss_navix/  → for NaviX internal includes (<faiss_navix/YYY.h>)
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../curator
+    ${CMAKE_CURRENT_SOURCE_DIR}/../curator/faiss
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../NaviX
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../NaviX/faiss_navix
+)
+
 if(URING_LIB)
     target_link_libraries(${PROJECT_NAME} PUBLIC ${URING_LIB})
 endif()

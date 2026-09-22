@@ -20,6 +20,7 @@
 #include <roaring/roaring.h>
 #include <roaring/roaring.hh>
 #include <faiss_navix/IndexHNSW.h>
+#include "../curator/curator_wrapper.h"
 #include <memory>
 #ifdef ENABLE_KNOWHERE_MILVUS_BASELINE
 #include <knowhere/index/index.h>
@@ -57,6 +58,22 @@ namespace ANNS
       // ========= Idea1 metrics =========
       // Method-1-specific fields.
       size_t candidate_set_size;
+      // Complexity instrumentation (candidate_set_size/CandSize is retained).
+      size_t trie_I_lmax = 0;      // |I(l_max)|
+      size_t els_C_trie = 0;       // |F-hat_q^(c)| from trie
+      size_t els_M_min = 0;        // |F-hat_q| minimum supersets
+      size_t els_A_all = 0;        // |F-hat_q^(a)| all bitmap-qualified groups
+      uint64_t els_containment_calls = 0;
+      uint64_t els_label_steps = 0;
+      uint64_t els_trie_nodes = 0;
+      uint64_t els_lng_nodes = 0;
+      uint64_t els_lng_edges = 0;
+      uint64_t els_scan_count = 0;
+      uint64_t els_skip_count = 0;
+      uint64_t els_selected_count = 0;
+      uint64_t els_mark_tests = 0;
+      uint64_t els_new_marks = 0;
+      uint64_t els_duplicate_marks = 0;
       size_t successful_checks = 0;
       float shortcut_hit_ratio = 0.0f;
       long long redundant_upward_steps = 0; // Revisited nodes during upward backtracking.
@@ -93,7 +110,12 @@ namespace ANNS
     double els_trie_time = 0;
     double els_sort_time = 0;
     double els_filter_time = 0;
-    double els_total_time = 0;
+      double els_total_time = 0;
+      double els_bitmap_time = 0;
+      double elspp_sort_time = 0;
+      double elspp_scan_time = 0;
+      double elspp_lng_time = 0;
+      double elspp_total_time = 0;
 
       double global_sort_time_ms = 0.0;  // Amortized global-sort time.
       double mask_gen_time_ms = 0.0;     // Physical mask generation time.
@@ -393,6 +415,15 @@ namespace ANNS
                                     std::atomic<int> &print_counter, bool is_new_trie_method, bool is_rec_more_start, QueryStats &stats,
                                     bool skip_group_id_check);
 
+      // fxy_add: bitmap-driven exact ELS. F_pass = ∩ _group_attr_roaring_inv[label];
+      // minimal elements = F_pass \ ∪ Desc(g). No trie traversal, no O(Y^2) shrink.
+      void get_min_super_sets_bitmap(const std::vector<LabelType> &query_label_set,
+                                     std::vector<IdxType> &min_super_set_ids) const;
+      // UNG++ sorted candidate scan with shared visited LNG traversal.
+      void get_min_super_sets_sorted_lng(const std::vector<LabelType> &query_label_set,
+                                          std::vector<IdxType> &min_super_set_ids,
+                                          QueryStats &stats) const;
+
       void warmup_selectors(uint32_t num_threads);// Warm up selector models to avoid first-query latency.
 
 
@@ -402,6 +433,10 @@ namespace ANNS
     // CRoaring inverted index for Method 3: [AttrID] -> RoaringBitmap(GroupIDs)
     std::vector<roaring::Roaring> _group_attr_roaring_inv;
     void build_group_inverted_indices();// Build the inverted index.
+    void build_curator(const std::string& save_path = "");  // Build (or load) Curator index
+    void configure_curator(int nlist, int nprobe, int max_leaf_size, int search_ef, int beam_size);
+    CuratorContext& get_curator_context() { return _curator_ctx; }
+    void set_base_storage(std::shared_ptr<IStorage> s) { _base_storage = s; }
     void evaluate_fpass_methods(std::shared_ptr<IStorage> query_storage, const std::string& output_csv_path);// Benchmark five Fpass computation methods.
 
     std::vector<int> load_query_algo_choices_from_csv(
@@ -601,6 +636,9 @@ namespace ANNS
       int _milvus_knowhere_hnsw_efc = 200;
       int _milvus_knowhere_hnsw_ef = 100;
 #endif
+      // FAVOR retains the distance-space parameter pointer after loading.
+      // Declare this before _favor_index so it outlives the index as well.
+      std::unique_ptr<hnswlib::L2Space> _favor_space;
       std::unique_ptr<favor::FAVOR<float>> _favor_index;
       bool _favor_ready = false;
       double _favor_build_time_ms = -1.0;
@@ -608,6 +646,9 @@ namespace ANNS
       std::unique_ptr<MethodSelector> _ung_acorn_selector;
       std::optional<bool> check_idea2_heuristic_override(const std::string& dataset_name, size_t num_entry_groups) const;
       std::optional<bool> check_pre_trie_heuristic(const std::string& dataset_name, size_t query_length, size_t candidate_set_size) const;
+
+      // Curator: hierarchical multi-tenant index (thin wrapper, like FAVOR)
+      CuratorContext _curator_ctx;
 
       // smartroute selector
       std::unique_ptr<MethodSelector> _smart_route_selector;    

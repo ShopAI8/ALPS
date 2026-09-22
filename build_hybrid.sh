@@ -6,11 +6,22 @@
 # Responsibilities:
 # 1. Compile the UNG, ACORN, FAVOR, and NaviX codebases.
 # 2. Check whether `fvecs` data needs to be converted to `bin`.
-# 3. Build indexes according to `build_mode` (`parallel`, `serial`, `ung_only`, `acorn_only`, `favor_only`, `navix_only`).
+# 3. Build indexes according to `build_mode` (`parallel`, `serial`, `ung_only`, `acorn_only`, `favor_only`, `navix_only`, `skip`, `compile`).
+#    `skip` bypasses all compilation, data conversion, and index building for query-only runs.
 # ==============================================================================
 
 set -euo pipefail
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+# Use a recent cmake (NaviX requires >=3.24, system has 3.22)
+# Prefer the pip-installed one in ~/.local/bin over the system /usr/bin.
+if [ -x "$HOME/.local/bin/cmake" ]; then
+    CMAKE="$HOME/.local/bin/cmake"
+elif [ -x "$HOME/.cache/uv/builds-v0/.tmprqNNhP/bin/cmake" ]; then
+    CMAKE="$HOME/.cache/uv/builds-v0/.tmprqNNhP/bin/cmake"
+else
+    CMAKE=cmake
+fi
 
 # --- Step 1: parse command-line arguments ---
 PARAMS=("$@")
@@ -37,14 +48,23 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$BUILD_MODE" in
-    parallel|serial|ung_only|acorn_only|favor_only|navix_only|all)
+    parallel|serial|ung_only|acorn_only|favor_only|navix_only|all|skip|compile)
         echo "[INFO] Build mode set to: $BUILD_MODE"
         ;;
     *)
-        echo "错误: 无效的 build_mode '$BUILD_MODE'。可用选项: parallel, serial, ung_only, acorn_only, favor_only, navix_only, all"
+        echo "错误: 无效的 build_mode '$BUILD_MODE'。可用选项: parallel, serial, ung_only, acorn_only, favor_only, navix_only, all, skip, compile"
         exit 1
         ;;
 esac
+
+# `skip` mode: bypass every build step (compilation, data conversion, index building).
+# Indexes are assumed to already exist from a previous build run; the caller should
+# proceed directly to ground-truth generation and search.
+if [[ "$BUILD_MODE" == "skip" ]]; then
+    echo "[INFO] Build mode is 'skip'. Skipping compilation, data conversion, and index building."
+    echo "[SUCCESS] No build performed. Assuming indexes already exist; proceed directly to query."
+    exit 0
+fi
 
 # --- Step 2: compile code ---
 
@@ -57,7 +77,7 @@ if [ ! -f "${NAVIX_BUILD_DIR}/faiss_navix/libfaiss.a" ] && [ ! -f "${NAVIX_BUILD
     echo "[INFO] NaviX library not found. Compiling..."
     rm -rf "$NAVIX_BUILD_DIR"
     mkdir -p "$NAVIX_BUILD_DIR"
-    cmake -S "${SCRIPT_DIR}/NaviX" -B "$NAVIX_BUILD_DIR" \
+    $CMAKE -S "${SCRIPT_DIR}/NaviX" -B "$NAVIX_BUILD_DIR" \
         -DFAISS_OPT_LEVEL=avx2 \
         -DFAISS_ENABLE_GPU=OFF \
         -DFAISS_ENABLE_PYTHON=OFF \
@@ -70,11 +90,7 @@ fi
 
 # 2. Build UNG next. Knowhere is required.
 if [[ -z "${KNOWHERE_INCLUDE_DIR:-}" || -z "${KNOWHERE_LIBRARY:-}" ]]; then
-    echo "[ERROR] Knowhere is mandatory for Milvus baseline."
-    echo "        Please export:"
-    echo "          KNOWHERE_INCLUDE_DIR=/path/to/knowhere/include"
-    echo "          KNOWHERE_LIBRARY=/path/to/libknowhere.so"
-    exit 1
+    echo "[WARN] Knowhere paths not set. Milvus baseline will be disabled."
 fi
 
 KNOWHERE_BOOTSTRAP_SCRIPT="${SCRIPT_DIR}/build_knowhere.sh"
@@ -84,28 +100,34 @@ if [[ ! -f "${KNOWHERE_LIBRARY}" && "${KNOWHERE_LIBRARY}" == "${LOCAL_KNOWHERE_L
     bash "${KNOWHERE_BOOTSTRAP_SCRIPT}"
 fi
 
+KNOWHERE_AVAILABLE=true
 if [[ ! -f "${KNOWHERE_INCLUDE_DIR}/knowhere/index/index_factory.h" ]]; then
-    echo "[ERROR] Invalid KNOWHERE_INCLUDE_DIR: ${KNOWHERE_INCLUDE_DIR}"
-    echo "        Missing: ${KNOWHERE_INCLUDE_DIR}/knowhere/index/index_factory.h"
-    exit 1
+    echo "[WARN] Knowhere include not found: ${KNOWHERE_INCLUDE_DIR}"
+    KNOWHERE_AVAILABLE=false
 fi
-
 if [[ ! -f "${KNOWHERE_LIBRARY}" ]]; then
-    echo "[ERROR] Invalid KNOWHERE_LIBRARY: ${KNOWHERE_LIBRARY}"
-    exit 1
+    echo "[WARN] Knowhere library not found: ${KNOWHERE_LIBRARY}"
+    KNOWHERE_AVAILABLE=false
 fi
 
-echo "[INFO] Compiling UNG with mandatory Knowhere Milvus baseline enabled."
+if $KNOWHERE_AVAILABLE; then
+    echo "[INFO] Knowhere found. Milvus baseline enabled."
+    KNOWHERE_FLAG="-DENABLE_KNOWHERE_MILVUS_BASELINE=ON"
+else
+    echo "[INFO] Knowhere not available. Milvus baseline disabled."
+    KNOWHERE_FLAG="-DENABLE_KNOWHERE_MILVUS_BASELINE=OFF"
+fi
+
 if [[ -z "${UNG_BUILD_DIR:-}" ]]; then
     UNG_BUILD_DIR="${SCRIPT_DIR}/UNG/codes/build"
 fi
 
 mkdir -p "$UNG_BUILD_DIR"
-cmake -S "${SCRIPT_DIR}/UNG/codes" -B "$UNG_BUILD_DIR" \
+$CMAKE -S "${SCRIPT_DIR}/UNG/codes" -B "$UNG_BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DNAVIX_BUILD_DIR="$NAVIX_BUILD_DIR" \
-    -DENABLE_KNOWHERE_MILVUS_BASELINE=ON \
+    ${KNOWHERE_FLAG} \
     -DKNOWHERE_INCLUDE_DIR="${KNOWHERE_INCLUDE_DIR}" \
     -DKNOWHERE_LIBRARY="${KNOWHERE_LIBRARY}"
 make -C "$UNG_BUILD_DIR" -j
@@ -125,13 +147,14 @@ ACORN_EXECUTABLE="${ACORN_BUILD_DIR}/demos/test_acorn"
 if [ ! -f "$ACORN_EXECUTABLE" ]; then
     echo "[INFO] ACORN executable not found. Compiling..."
     mkdir -p "$ACORN_BUILD_DIR"
-    cmake -S "${SCRIPT_DIR}/ACORN" -B "$ACORN_BUILD_DIR" \
+    $CMAKE -S "${SCRIPT_DIR}/ACORN" -B "$ACORN_BUILD_DIR" \
         -DFAISS_ENABLE_GPU=OFF \
         -DFAISS_ENABLE_PYTHON=OFF \
         -DBUILD_TESTING=ON \
         -DBUILD_SHARED_LIBS=ON \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+        -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=/tmp/googletest_src
     make -C "$ACORN_BUILD_DIR" -j test_acorn
 else
     echo "[INFO] ACORN executable found."
@@ -155,7 +178,7 @@ if [ ! -f "$FAVOR_EXECUTABLE" ] || [ "$FAVOR_BUILD_SOURCE" -nt "$FAVOR_EXECUTABL
     echo "[INFO] Recreating FAVOR build directory before configuration..."
     rm -rf "$FAVOR_BUILD_DIR"
     mkdir -p "$FAVOR_BUILD_DIR"
-    cmake -S "$FAVOR_SOURCE_DIR" -B "$FAVOR_BUILD_DIR" \
+    $CMAKE -S "$FAVOR_SOURCE_DIR" -B "$FAVOR_BUILD_DIR" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5
     make -C "$FAVOR_BUILD_DIR" -j build_index
@@ -210,7 +233,7 @@ echo "[INFO] Build threads set to: $BUILD_THREADS"
 
 UNG_MARKER_FILE="$INDEX_OUTPUT_DIR/index_files/.ung_built"
 ACORN_MARKER_FILE="$INDEX_OUTPUT_DIR/acorn_output/.acorn_built"
-FAVOR_MARKER_FILE="$INDEX_OUTPUT_DIR/FAVOR/.favor_built"
+FAVOR_MARKER_FILE="$INDEX_OUTPUT_DIR/FAVOR/favor.meta"
 NAVIX_MARKER_FILE="$INDEX_OUTPUT_DIR/navix_output/.navix_built"
 UNG_BUILD_STATUS="unknown"
 FAVOR_BUILD_STATUS="unknown"
@@ -605,6 +628,9 @@ elif [ "$BUILD_MODE" == "favor_only" ]; then
 elif [ "$BUILD_MODE" == "navix_only" ]; then
     echo "--- [Executing in NAVIX_ONLY mode] ---"
     build_navix
+elif [ "$BUILD_MODE" == "compile" ]; then
+    echo "--- [Executing in COMPILE-ONLY mode] ---"
+    echo "[INFO] 仅编译全部代码库（NaviX/ACORN/FAVOR/UNG），不构建任何索引。"
 fi
 
 end_time_ms=$(date +%s%3N)

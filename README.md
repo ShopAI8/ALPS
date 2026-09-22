@@ -1,6 +1,6 @@
 # Filtered Approximate Nearest Neighbor Search on Vectors with Diverse Labels
 
-This repository provides **SODA**, an enhanced implementation for **Filtered Approximate Nearest Neighbor Search (Filtered ANNS)**. SODA improves **UNG (Unified Navigating Graph)** with an accelerated variant named **UNG+**, and further integrates the core ideas of **UNG+**, **FAVOR**, and **Pre-Filtering**. It introduces a new **AI-based intelligent routing** mechanism that adaptively schedules algorithms using a machine learning model. In addition, the improved version, **SODA+**, addresses cache thrashing caused by frequent switching among algorithms.
+This repository provides **ALPS**, an enhanced implementation for **Filtered Approximate Nearest Neighbor Search (Filtered ANNS)**. ALPS improves **UNG (Unified Navigating Graph)** with an accelerated variant named **TFNG**, and further integrates the core ideas of **TFNG**, **FAVOR**, and **Pre-Filtering**. It introduces a new **AI-based intelligent routing** mechanism that adaptively schedules algorithms using a machine learning model. In addition, the improved version, **ALPS+**, addresses cache thrashing caused by frequent switching among algorithms.
 
 ---
 
@@ -8,7 +8,7 @@ This repository provides **SODA**, an enhanced implementation for **Filtered App
 
 ### 1.1 Environment Setup
 
-We conduct experiments on a Linux server with two Intel Xeon Gold 6342 processors, 144 threads, and 1 TB RAM. All algorithms are implemented in C++ and compiled with GCC 11.4.0. The project is built with CMake 4.3.2 and Boost 1.85.0.
+We conduct experiments on a Linux server with two Intel Xeon Gold 6342 processors, 144 threads, and 1 TB RAM. All algorithms are implemented in C++ and python. The project is built with CMake 4.3.2 and Boost 1.85.0.
 
 The experimental environment is as follows:
 
@@ -49,7 +49,7 @@ The main structure of the repository is as follows:
 FilterVectorCode/
 ├── ACORN/                  # Implementation related to ACORN
 ├── NaviX/                  # Implementation related to NaviX
-├── UNG/                    # UNG / UNG+ implementation and data-processing scripts
+├── UNG/                    # UNG / TFNG implementation and data-processing scripts
 ├── knowhere/               # Dependency for the Milvus baseline
 ├── FAVOR/                  # Dependency for the FAVOR baseline
 ├── data/                   # Dataset directory
@@ -144,8 +144,8 @@ The following parameters in the configuration files or scripts determine the beh
 
 | Parameter | Description | Values / Notes |
 | :--- | :--- | :--- |
-| `ROUTING_MODE` | Determines the routing logic. | `0`: Baseline mode; `1`: **SODA**; `5`: **SODA+**. |
-| `BASELINE_ALG` | Specifies the algorithm when `ROUTING_MODE=0`. | `0`: UNG; `2`: ACORN-gamma; `4`: NaviX; `5`: Pre-Filtering; `6`: ACORN-1; `8`: UNG+; `9`: Milvus-IVF; `10`: Milvus-HNSW; `11`: FAVOR; `12`: FAVOR-HNSW. |
+| `ROUTING_MODE` | Determines the routing logic. | `0`: Baseline mode; `1`: **ALPS**; `5`: **ALPS+**. |
+| `BASELINE_ALG` | Specifies the algorithm when `ROUTING_MODE=0`. | `0`: UNG; `2`: ACORN-gamma; `4`: NaviX; `5`: Pre-Filtering; `6`: ACORN-1; `8`: TFNG; `15`: Milvus-IVF; `10`: Milvus-HNSW; `11`: FAVOR; `12`: FAVOR-HNSW; `13`: Curator|
 | `BUILD_MODE` | Specifies the index construction mode. | `parallel`: Build all indexes in parallel; `acorn_only`: Build only the ACORN index. |
 | `Lsearch` | Search parameter for UNG. | Similar to `efSearch` in HNSW; controls the search depth. |
 | `efs_start/step` | Search parameters for ACORN/NaviX. | Used to dynamically adjust the filtering strength during search. |

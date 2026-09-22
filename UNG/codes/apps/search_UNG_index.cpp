@@ -4,6 +4,8 @@
 #include <numeric>
 #include <iostream>
 #include <bitset>
+#include <cstdlib>
+#include <algorithm>
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
 #include "uni_nav_graph.h"
@@ -65,10 +67,26 @@ float calculate_single_query_recall(const std::pair<ANNS::IdxType, float> *gt,
       }
       // Condition 2: ID differs, but the distance is still within the GT tie threshold.
       // This assumes `results[i].second` is a valid distance value.
-      else if (results[i].second <= gt_threshold + epsilon) 
+      else if (results[i].second <= gt_threshold + epsilon)
       {
          correct++;
       }
+   }
+
+   // Debug: print first query
+   static int dbg_cnt = 0;
+   if (dbg_cnt++ < 2) {
+       std::cout << "[RECALL DEBUG] gt_threshold=" << gt_threshold
+                 << " gt_set_size=" << gt_set.size() << " correct=" << correct
+                 << " recall=" << static_cast<float>(correct) / gt_set.size() << std::endl;
+       std::cout << "[RECALL DEBUG] GT top-3: ";
+       for (int i = 0; i < std::min((int)K, 3); ++i)
+           std::cout << "(" << gt[i].first << "," << gt[i].second << ") ";
+       std::cout << std::endl;
+       std::cout << "[RECALL DEBUG] RES top-3: ";
+       for (int i = 0; i < std::min((int)K, 3); ++i)
+           std::cout << "(" << results[i].first << "," << results[i].second << ") ";
+       std::cout << std::endl;
    }
 
    return static_cast<float>(correct) / gt_set.size();
@@ -151,6 +169,7 @@ int main(int argc, char **argv)
    std::string data_type, dist_fn, scenario;
    std::string base_bin_file, query_bin_file, base_label_file, query_label_file, gt_file, index_path_prefix, result_path_prefix, selector_modle_prefix, query_group_id_file;
    std::string acorn_index_path, acorn_1_index_path, navix_index_path, algo_choice_csv_path;
+   std::string curator_index_path;
    std::string export_acorn_level0_graph_path;
    ANNS::IdxType K, num_entry_points;
    std::vector<ANNS::IdxType> Lsearch_list;
@@ -159,7 +178,13 @@ int main(int argc, char **argv)
    bool is_new_trie_method = false, is_rec_more_start = false; // false: original UNG trie method; true: recursive variant. false: default root strategy.
    bool is_ung_more_entry = false;                             // false: original UNG entry-point selection; true: allow more entry points.
    // bool is_bfs_filter = true;                               // true: original ACORN; false: improved variant.
-   int baseline_alg = 0; // 0/1/8=UNG, 2/3/4/6=ACORN, 5=pre-filter, 7=NaviX, 9=Milvus-IVF, 10=Milvus-HNSW, 11=FAVOR, 12=FAVOR-HNSW
+   int baseline_alg = 0; // 0/1/8=UNG, 2/3/4/6=ACORN, 5=pre-filter, 7=NaviX, 9=Milvus-IVF, 10=Milvus-HNSW, 11=FAVOR, 12=FAVOR-HNSW, 13=Curator
+   // Curator parameters (defaults from original curator-v2 paper)
+   int curator_nlist = 32;
+   int curator_nprobe = 1200;        // matches original Curator default
+   int curator_max_leaf_size = 256;  // matches original max_sl_size default
+   int curator_search_ef = 128;      // middle of paper's [32,64,128,256,512] sweep
+   int curator_beam_size = 1;
    int num_repeats = 1;                                        // Run one repeat by default.
    int routing_mode = 0;                                      // 0: auto, 1: UNG (nT=false), 2: UNG-nTtrue, 3: ACORN
    int lsearch_start, lsearch_step;
@@ -196,8 +221,8 @@ int main(int argc, char **argv)
                          "Path to save the querying result file");
       desc.add_options()("selector_modle_prefix", po::value<std::string>(&selector_modle_prefix)->required(),
                          "Path to selector_modle_prefix");
-      desc.add_options()("query_group_id_file", po::value<std::string>(&query_group_id_file)->required(),
-                         "query_group_id_file");
+      desc.add_options()("query_group_id_file", po::value<std::string>(&query_group_id_file)->default_value(""),
+                         "Optional per-query source-group ID file");
       desc.add_options()("acorn_index_path", po::value<std::string>(&acorn_index_path)->default_value(""),
                          "acorn_index_path");
       desc.add_options()("acorn_1_index_path", po::value<std::string>(&acorn_1_index_path)->default_value(""),
@@ -221,11 +246,11 @@ int main(int argc, char **argv)
       desc.add_options()("is_rec_more_start", po::value<bool>(&is_rec_more_start)->required(),
                          "is_rec_more_start");
       // desc.add_options()("is_bfs_filter", po::value<bool>(&is_bfs_filter)->default_value(true), "Whether to use BFS filter in ACORN");
-      desc.add_options()("baseline_alg", po::value<int>(&baseline_alg)->default_value(0), "Algorithm selector: 0/1/8=UNG family, 2/3/4/6=ACORN family, 5=pre-filter, 7=NaviX, 9=Milvus-IVF, 10=Milvus-HNSW, 11=FAVOR, 12=FAVOR-HNSW");
+      desc.add_options()("baseline_alg", po::value<int>(&baseline_alg)->default_value(0), "Algorithm selector: 0/1/8=UNG family, 2/3/4/6=ACORN family, 5=pre-filter, 7=NaviX, 9=Milvus-IVF, 10=Milvus-HNSW, 11=FAVOR, 12=FAVOR-HNSW, 14=UNG++(bitmap ELS), 15=UNG++(sorted-LNG ELS)");
       desc.add_options()("num_repeats", po::value<int>(&num_repeats)->default_value(1),
                          "Number of repeats for each Lsearch value");
       desc.add_options()("routing_mode", po::value<int>(&routing_mode)->required(),
-                         "0: auto, 1: SODA, 2: FastSmartRoute, 3: FastSmartRoute+, 5: SODA+, 6: SmartRoute++, 7: SmartRoute+++");
+                         "0: auto, 1: SODA, 2: FastSmartRoute, 3: FastSmartRoute+, 5: SODA+, 6: SmartRoute++, 7: SmartRoute+++, 8: ALPS-fixed");
       desc.add_options()("algo_choice_csv", po::value<std::string>(&algo_choice_csv_path)->default_value(""),
                          "Optional CSV path for per-query algorithm override. Format: QueryID,Algo_Choice");
       desc.add_options()("lsearch_start", po::value<int>(&lsearch_start)->required(), "Lsearch start value");
@@ -243,7 +268,19 @@ int main(int argc, char **argv)
       desc.add_options()("optimize_standalone_prefilter", po::value<bool>(&optimize_standalone_prefilter)->default_value(false),
                    "Whether to fully optimize pre-filter when running as standalone baseline");
 
-
+      // Curator
+      desc.add_options()("curator_nlist", po::value<int>(&curator_nlist)->default_value(32),
+                   "Curator: number of clusters (<=64)");
+      desc.add_options()("curator_nprobe", po::value<int>(&curator_nprobe)->default_value(16),
+                   "Curator: number of probes for unfiltered search");
+      desc.add_options()("curator_max_leaf_size", po::value<int>(&curator_max_leaf_size)->default_value(128),
+                   "Curator: max vectors per leaf");
+      desc.add_options()("curator_search_ef", po::value<int>(&curator_search_ef)->default_value(10),
+                   "Curator: search expansion factor (must be >= 1)");
+      desc.add_options()("curator_beam_size", po::value<int>(&curator_beam_size)->default_value(1),
+                   "Curator: beam search width");
+      desc.add_options()("curator_index_path", po::value<std::string>(&curator_index_path)->default_value(""),
+                   "Curator: path to save/load curator index");
 
       po::variables_map vm;
       po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -281,15 +318,25 @@ int main(int argc, char **argv)
 
    // load index
    ANNS::UniNavGraph index(query_storage->get_num_points());
-   index.load(index_path_prefix, selector_modle_prefix, data_type, acorn_index_path, acorn_1_index_path,
-              dataset, routing_mode, baseline_alg);
-   index.set_ung_distance_mode(ung_distance_mode);
-   index.prepare_rabitq_query_contexts(query_storage, query_bin_file);
 
-   // `index.load(...)` already loads `vector_attr_graph` and builds the
-   // vector-level inverted index when the bipartite graph file exists.
-   // Keep only the group-level inverted index construction here.
-   index.build_group_inverted_indices();
+   if (routing_mode == 0 && baseline_alg == 13) {
+       // Curator-only mode: load base data directly, skip UNG graph/trie
+       std::cout << "[SODA] Curator-only mode: loading base data, skipping UNG index" << std::endl;
+       auto base_storage = ANNS::create_storage(data_type);
+       base_storage->load_from_file(base_bin_file, base_label_file);
+       index.set_base_storage(base_storage);
+       index.configure_curator(curator_nlist, curator_nprobe, curator_max_leaf_size, curator_search_ef, curator_beam_size);
+       if (curator_index_path.empty()) {
+           curator_index_path = std::string(index_path_prefix) + "curator_index.bin";
+       }
+       index.build_curator(curator_index_path);
+   } else {
+       index.load(index_path_prefix, selector_modle_prefix, data_type, acorn_index_path, acorn_1_index_path,
+                  dataset, routing_mode, baseline_alg);
+       index.set_ung_distance_mode(ung_distance_mode);
+       index.prepare_rabitq_query_contexts(query_storage, query_bin_file);
+       index.build_group_inverted_indices();
+   }
 
 
    // Naxiv
@@ -309,7 +356,11 @@ int main(int argc, char **argv)
 
    // Load the per-query source-group id file.
    std::vector<ANNS::IdxType> true_query_group_ids;
-   std::ifstream source_group_file(query_group_id_file);
+   std::ifstream source_group_file;
+   if (!query_group_id_file.empty())
+   {
+      source_group_file.open(query_group_id_file);
+   }
    if (source_group_file.is_open())
    {
       ANNS::IdxType group_id;
@@ -320,13 +371,14 @@ int main(int argc, char **argv)
       source_group_file.close();
       std::cout << "成功加载 " << true_query_group_ids.size() << " 个查询的来源组ID。" << std::endl;
    }
-   else // The run can continue without it, but that optimization path stays disabled.
+   else if (!query_group_id_file.empty()) // The run can continue without it, but that optimization path stays disabled.
    {
       std::cerr << "警告：未找到查询来源组ID文件: " << query_group_id_file << std::endl;
    }
 
    // preparation
    auto num_queries = query_storage->get_num_points();
+
    std::shared_ptr<ANNS::DistanceHandler> distance_handler = ANNS::get_distance_handler(data_type, dist_fn);
    auto gt = new std::pair<ANNS::IdxType, float>[num_queries * K];
    ANNS::load_gt_file(gt_file, gt, num_queries, K);
@@ -530,7 +582,12 @@ int main(int argc, char **argv)
              }
          }
 
-         // --- 2. Time and execute the search ---
+         // --- 2. For Curator: repurpose Lsearch as search_ef sweep parameter ---
+         if (routing_mode == 0 && baseline_alg == 13) {
+             ANNS::curator_update_search_ef(index.get_curator_context(), static_cast<int>(current_Lsearch));
+         }
+
+         // --- 3. Time and execute the search ---
          auto start_time = std::chrono::high_resolution_clock::now();
          if (!is_new_method)
          {
@@ -728,7 +785,12 @@ int main(int argc, char **argv)
               << "RabitQ_BinT_ms,RabitQ_FullT_ms,RabitQ_BinCalls,RabitQ_FullCalls,RabitQ_CtxReused,"
               << "AcornFilterType,"
               << "QuerySize,CandSize,ExactCandSize,GlobalPpass,"
-              << "NumEntries,NumDescendants"
+              << "NumEntries,NumDescendants,"
+              << "Trie_I_lmax,ELS_C_trie,ELS_A_all,ELS_M_min,"
+              << "ELS_ContainmentCalls,ELS_LabelSteps,ELS_TrieNodes,"
+              << "ELSPP_Scan,ELSPP_Skip,ELSPP_Selected,ELSPP_LNGNodes,ELSPP_LNGEdges,"
+              << "ELSPP_MarkTests,ELSPP_NewMarks,ELSPP_DuplicateMarks,"
+              << "ELSPP_BitmapT_ms,ELSPP_SortT_ms,ELSPP_ScanT_ms,ELSPP_LNGT_ms,ELSPP_TotalT_ms"
               << "\n";
    for (int repeat = 0; repeat < num_repeats; repeat++)
    {
@@ -779,7 +841,27 @@ int main(int argc, char **argv)
                        << stats.exact_cand_size << ","  
                        << stats.global_p_pass << ","
                        << stats.num_entry_points << ","
-                       << stats.num_lng_descendants <<"\n";
+                       << stats.num_lng_descendants << ","
+                       << stats.trie_I_lmax << ","
+                       << stats.els_C_trie << ","
+                       << stats.els_A_all << ","
+                       << stats.els_M_min << ","
+                       << stats.els_containment_calls << ","
+                       << stats.els_label_steps << ","
+                       << stats.els_trie_nodes << ","
+                       << stats.els_scan_count << ","
+                       << stats.els_skip_count << ","
+                       << stats.els_selected_count << ","
+                       << stats.els_lng_nodes << ","
+                       << stats.els_lng_edges << ","
+                       << stats.els_mark_tests << ","
+                       << stats.els_new_marks << ","
+                       << stats.els_duplicate_marks << ","
+                       << stats.els_bitmap_time << ","
+                       << stats.elspp_sort_time << ","
+                       << stats.elspp_scan_time << ","
+                       << stats.elspp_lng_time << ","
+                       << stats.elspp_total_time << "\n";
          }
       }
    }

@@ -60,6 +60,14 @@ while read -r dataset_config; do
     SELECTOR_MODEL_PATH_DEFAULT=$(echo "$SHARED_CONFIG" | jq -r '.selector_model_path // ""')
     ROUTER_ZERO_ALGORITHM_DEFAULT=$(echo "$SHARED_CONFIG" | jq -r '.router_zero_algorithm // ""')
     RESULT_NAME_SUFFIX_DEFAULT=$(echo "$SHARED_CONFIG" | jq -r '.result_name_suffix // ""')
+    ALGO_CHOICE_CSV_DEFAULT=$(echo "$SHARED_CONFIG" | jq -r '.algo_choice_csv // ""')
+
+    # Read shared Curator parameters
+    CURATOR_NLIST=$(echo "$SHARED_CONFIG" | jq -r '.curator_params.nlist // "32"')
+    CURATOR_NPROBE=$(echo "$SHARED_CONFIG" | jq -r '.curator_params.nprobe // "1200"')
+    CURATOR_MAX_LEAF_SIZE=$(echo "$SHARED_CONFIG" | jq -r '.curator_params.max_leaf_size // "256"')
+    CURATOR_BEAM_SIZE=$(echo "$SHARED_CONFIG" | jq -r '.curator_params.beam_size // "1"')
+    export CURATOR_NLIST CURATOR_NPROBE CURATOR_MAX_LEAF_SIZE CURATOR_BEAM_SIZE
 
     # Resolve the project root from PROJECT_ROOT, or infer it from this script.
     PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
@@ -68,12 +76,19 @@ while read -r dataset_config; do
     export NAVIX_BUILD_DIR="${PROJECT_ROOT}/build_para_${DATASET}/navix"
     BUILD_ONLY_INDEX_PREPARED=false
 
-    # Resolve Knowhere paths, falling back to the local repo defaults.
-    if [[ -z "${KNOWHERE_INCLUDE_DIR:-}" ]]; then
-        export KNOWHERE_INCLUDE_DIR="${SCRIPT_DIR}/knowhere/include"
-    fi
-    if [[ -z "${KNOWHERE_LIBRARY:-}" ]]; then
-        export KNOWHERE_LIBRARY="${SCRIPT_DIR}/knowhere/build/Release/libknowhere.so"
+    # Resolve Knowhere paths. Prefer this checkout, then reuse the shared
+    # FilterVectorCode build when the local source tree has not been built.
+    LOCAL_KNOWHERE_DIR="${SCRIPT_DIR}/knowhere"
+    SHARED_KNOWHERE_DIR="${PROJECT_ROOT}/FilterVectorCode/knowhere"
+    if [[ -z "${KNOWHERE_INCLUDE_DIR:-}" || -z "${KNOWHERE_LIBRARY:-}" ]]; then
+        KNOWHERE_DIR="${LOCAL_KNOWHERE_DIR}"
+        if [[ ! -f "${LOCAL_KNOWHERE_DIR}/build/Release/libknowhere.so" && \
+              -f "${SHARED_KNOWHERE_DIR}/build/Release/libknowhere.so" ]]; then
+            KNOWHERE_DIR="${SHARED_KNOWHERE_DIR}"
+            echo "[INFO] Reusing shared Knowhere build: ${KNOWHERE_DIR}"
+        fi
+        export KNOWHERE_INCLUDE_DIR="${KNOWHERE_INCLUDE_DIR:-${KNOWHERE_DIR}/include}"
+        export KNOWHERE_LIBRARY="${KNOWHERE_LIBRARY:-${KNOWHERE_DIR}/build/Release/libknowhere.so}"
     fi
 
     # export UNG_BUILD_DIR="/home/fengxiaoyao/FilterVector/build_para/ung"
@@ -92,6 +107,7 @@ while read -r dataset_config; do
         TASK_SELECTOR_MODEL_PATH=$(echo "$task" | jq -r '.selector_model_path // ""')
         TASK_ROUTER_ZERO_ALGORITHM=$(echo "$task" | jq -r '.router_zero_algorithm // ""')
         TASK_RESULT_NAME_SUFFIX=$(echo "$task" | jq -r '.result_name_suffix // ""')
+        TASK_ALGO_CHOICE_CSV=$(echo "$task" | jq -r '.algo_choice_csv // ""')
 
         EFFECTIVE_SELECTOR_MODEL_PATH="$SELECTOR_MODEL_PATH_DEFAULT"
         if [[ -n "$TASK_SELECTOR_MODEL_PATH" && "$TASK_SELECTOR_MODEL_PATH" != "null" ]]; then
@@ -106,6 +122,11 @@ while read -r dataset_config; do
         EFFECTIVE_RESULT_NAME_SUFFIX="$RESULT_NAME_SUFFIX_DEFAULT"
         if [[ -n "$TASK_RESULT_NAME_SUFFIX" && "$TASK_RESULT_NAME_SUFFIX" != "null" ]]; then
             EFFECTIVE_RESULT_NAME_SUFFIX="$TASK_RESULT_NAME_SUFFIX"
+        fi
+
+        EFFECTIVE_ALGO_CHOICE_CSV="$ALGO_CHOICE_CSV_DEFAULT"
+        if [[ -n "$TASK_ALGO_CHOICE_CSV" && "$TASK_ALGO_CHOICE_CSV" != "null" ]]; then
+            EFFECTIVE_ALGO_CHOICE_CSV="$TASK_ALGO_CHOICE_CSV"
         fi
 
         # Fail fast if the required task parameter is missing.
@@ -130,12 +151,16 @@ while read -r dataset_config; do
                 "pre-filter")     ROUTING_MODE=0; BASELINE_ALG=5 ; IS_REC_MORE_START=false;;
                 "ACORN-1")        ROUTING_MODE=0; BASELINE_ALG=6 ; IS_REC_MORE_START=false;;
                 "UNG+")           ROUTING_MODE=0; BASELINE_ALG=8 ; IS_REC_MORE_START=false;;
+                "UNG++")          ROUTING_MODE=0; BASELINE_ALG=14; IS_REC_MORE_START=false;;
+                "TFNG") ROUTING_MODE=0; BASELINE_ALG=15; IS_REC_MORE_START=false;;
                 "Milvus-IVF")     ROUTING_MODE=0; BASELINE_ALG=9 ; IS_REC_MORE_START=false;;
                 "Milvus-HNSW")    ROUTING_MODE=0; BASELINE_ALG=10; IS_REC_MORE_START=false;;
                 "FAVOR")          ROUTING_MODE=0; BASELINE_ALG=11; IS_REC_MORE_START=false;;
                 "FAVOR-HNSW")     ROUTING_MODE=0; BASELINE_ALG=12; IS_REC_MORE_START=false;;
-                "SODA")     ROUTING_MODE=1; BASELINE_ALG=-1 ; IS_REC_MORE_START=true;; 
-                "SODA+")    ROUTING_MODE=5; BASELINE_ALG=-1 ; IS_REC_MORE_START=true;;
+                "Curator")        ROUTING_MODE=0; BASELINE_ALG=13; IS_REC_MORE_START=false;;
+                "ALPS")     ROUTING_MODE=1; BASELINE_ALG=-1 ; IS_REC_MORE_START=true;;
+                "ALPS+")    ROUTING_MODE=5; BASELINE_ALG=-1 ; IS_REC_MORE_START=true;;
+                "ALPS-fixed") ROUTING_MODE=8; BASELINE_ALG=-1 ; IS_REC_MORE_START=true;;
                 *)
                     echo "错误: 未知的算法名称 '$ALGORITHM_NAME'。请在 exp.sh 的 case 语句中定义它。"
                     exit 1;;
@@ -168,7 +193,10 @@ while read -r dataset_config; do
 
             # --- Call build_hybrid.sh ---
             # build_hybrid.sh handles compilation, data conversion, and index building.
-            if [[ "$BUILD_MODE" == "parallel" || "$BUILD_MODE" == "acorn_only" || "$BUILD_MODE" == "navix_only" || "$BUILD_MODE" == "ung_only" || "$BUILD_MODE" == "favor_only" ]]; then
+            # `skip` mode bypasses the build entirely and goes straight to query.
+            if [[ "$BUILD_MODE" == "skip" ]]; then
+                echo "[INFO] Build mode is 'skip'. Skipping index build. Proceeding directly to ground truth + search."
+            elif [[ "$BUILD_MODE" == "parallel" || "$BUILD_MODE" == "acorn_only" || "$BUILD_MODE" == "navix_only" || "$BUILD_MODE" == "ung_only" || "$BUILD_MODE" == "favor_only" ]]; then
                 if [[ "$BUILD_ONLY_INDEX_PREPARED" == true ]]; then
                     echo "Preparing build index..."
                     echo "[INFO] Build-only mode: index already prepared for dataset '$DATASET' in this run. Skipping duplicate rebuild."
@@ -199,7 +227,7 @@ while read -r dataset_config; do
             fi
             
             # Some build modes are build-only and should skip GT generation and search.
-            if [[ "$BUILD_MODE" == "parallel" || "$BUILD_MODE" == "acorn_only" || "$BUILD_MODE" == "navix_only" || "$BUILD_MODE" == "ung_only" || "$BUILD_MODE" == "favor_only" ]]; then
+            if [[ "$BUILD_MODE" == "parallel" || "$BUILD_MODE" == "acorn_only" || "$BUILD_MODE" == "navix_only" || "$BUILD_MODE" == "ung_only" || "$BUILD_MODE" == "favor_only" || "$BUILD_MODE" == "compile" ]]; then
                echo "[INFO] Skipping GT generation and search steps."
                echo "--- The current experimental configuration processing has been completed (BUILD ONLY) ---"
                continue
@@ -224,10 +252,13 @@ while read -r dataset_config; do
                echo "Using selector model path override: $EFFECTIVE_SELECTOR_MODEL_PATH"
             fi
             if [[ -n "$EFFECTIVE_ROUTER_ZERO_ALGORITHM" ]]; then
-               echo "Using SODA class-0 override: $EFFECTIVE_ROUTER_ZERO_ALGORITHM"
+               echo "Using ALPS class-0 override: $EFFECTIVE_ROUTER_ZERO_ALGORITHM"
             fi
             if [[ -n "$EFFECTIVE_RESULT_NAME_SUFFIX" ]]; then
                echo "Using result name suffix override: $EFFECTIVE_RESULT_NAME_SUFFIX"
+            fi
+            if [[ -n "$EFFECTIVE_ALGO_CHOICE_CSV" ]]; then
+               echo "Using per-query oracle choices: $EFFECTIVE_ALGO_CHOICE_CSV"
             fi
             echo "Begin search (K=$K)..."
             if [[ -n "$EFFECTIVE_SELECTOR_MODEL_PATH" ]]; then
@@ -258,11 +289,13 @@ while read -r dataset_config; do
                --ung_distance_mode "$UNG_DISTANCE_MODE" \
                --efs_start "$ACORN_EFS_START" \
                --efs_step_slow "$ACORN_EFS_STEP_SLOW" --efs_step_fast "$ACORN_EFS_STEP_FAST" --lsearch_threshold "$LSEARCH_THRESHOLD" \
-               --optimize_standalone_prefilter "$OPTIMIZE_STANDALONE_PREFILTER"
+               --optimize_standalone_prefilter "$OPTIMIZE_STANDALONE_PREFILTER" \
+               --algo_choice_csv "$EFFECTIVE_ALGO_CHOICE_CSV"
                     
             echo "--- Finished: Dataset=[$DATASET], Query=[$QUERY_DIR_NAME], Algorithm=[$ALGORITHM_NAME] ---"
         done < <(echo "$task" | jq -r '.algorithms[]')
     done < <(echo "$dataset_config" | jq -c '.tasks[]')
-done < <(jq -c '.experiments[]' "$CONFIG_FILE")
+done < <(jq -c --arg dataset_filter "${EXPERIMENT_DATASET_FILTER:-}" \
+    '.experiments[] | select($dataset_filter == "" or .dataset_name == $dataset_filter)' "$CONFIG_FILE")
 
 echo -e "\n所有实验已完成！"

@@ -5,6 +5,7 @@
 # ==============================================================================
 
 set -e # Exit immediately if any command fails
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 # --- Step 1: Parse command-line arguments ---
 while [[ $# -gt 0 ]]; do
@@ -54,6 +55,7 @@ RESULT_OUTPUT_DIR="${ALGO_RESULT_DIR}/Index[${INDEX_DIR_NAME}]_GT[${GT_DIR_NAME}
 # --- Step 3: Create result directories ---
 mkdir -p "$RESULT_OUTPUT_DIR/results"
 mkdir -p "$RESULT_OUTPUT_DIR/others"
+mkdir -p "$(dirname "$CURATOR_INDEX_PATH")"
 
 # --- Step 4: Prepare the Lsearch parameter sequence ---
 LSEARCH_VALUES=$(seq "$LSEARCH_START" "$LSEARCH_STEP" "$LSEARCH_END" | tr '\n' ' ')
@@ -63,12 +65,26 @@ echo "Evaluating the following Lsearch values: $LSEARCH_VALUES"
 # Select the index base directory according to the build mode
 if [[ "$BUILD_MODE" == "parallel" ]]; then
     INDEX_BASE_DIR="Index_parallel"
+elif [[ "$BUILD_MODE" == "skip" ]]; then
+    # Skip mode: the index was built by a previous run, whose base dir is unknown.
+    # Prefer the parallel dir if this exact index was built there, else fall back to Index.
+    if [[ -d "${SHARED_OUTPUT_DIR}/Index_parallel/${INDEX_DIR_NAME}" ]]; then
+        INDEX_BASE_DIR="Index_parallel"
+        echo "[INFO] Skip mode: parallel index found at Index_parallel/${INDEX_DIR_NAME}."
+    else
+        INDEX_BASE_DIR="Index"
+        echo "[INFO] Skip mode: no parallel index found, using Index/${INDEX_DIR_NAME}."
+    fi
 else
     INDEX_BASE_DIR="Index"
 fi
 INDEX_PATH="${SHARED_OUTPUT_DIR}/${INDEX_BASE_DIR}/${INDEX_DIR_NAME}"
 GT_PATH="${SHARED_OUTPUT_DIR}/GroundTruth/${GT_DIR_NAME}"
 MODEL_PATH="${SHARED_OUTPUT_DIR}/SelectModels"
+if [[ -n "${SELECTOR_MODEL_PATH:-}" ]]; then
+    MODEL_PATH="$SELECTOR_MODEL_PATH"
+fi
+CURATOR_INDEX_PATH="${SHARED_OUTPUT_DIR}/Index/CuratorIndex/curator_index.bin"
 # MODEL_PATH="/noraiddata/lijiakang/FilterVector/FilterVectorResults/OLD/${DATASET}/SelectModels"
 ACORN_INDEX_PREFIX="${INDEX_PATH}/acorn_output"
 NAVIX_INDEX_PATH="${INDEX_PATH}/navix_output/hnsw_base.index"
@@ -120,7 +136,32 @@ echo "Search results will be written to: $RESULT_OUTPUT_DIR"
 echo "Using ACORN index: ${ACORN_INDEX_FILE}"
 echo "Using NaviX index: $NAVIX_INDEX_PATH"
 
-# --- Step 6: Execute the search workload ---
+# --- Step 6: Ensure query is in .bin format ---
+QUERY_FVECS="${QUERY_DIR}/${DATASET}_query.fvecs"
+QUERY_BIN="${QUERY_DIR}/${DATASET}_query.bin"
+if [ ! -f "$QUERY_BIN" ] && [ -f "$QUERY_FVECS" ]; then
+    echo "Converting query from .fvecs to .bin..."
+    FVECS_TO_BIN="$BUILD_DIR/tools/fvecs_to_bin"
+    if [ ! -x "$FVECS_TO_BIN" ]; then
+        # Try Python fallback
+        python3 -c "
+import struct, sys
+with open('$QUERY_FVECS','rb') as f: data = f.read()
+n, pos, vecs = 0, 0, []
+while pos < len(data):
+    d = struct.unpack_from('i', data, pos)[0]; pos += 4
+    vecs.append(data[pos:pos+d*4]); pos += d*4; n += 1
+with open('$QUERY_BIN','wb') as out:
+    out.write(struct.pack('II', n, d))
+    for v in vecs: out.write(v)
+print(f'Converted {n} queries x {d} dim')
+"
+    else
+        "$FVECS_TO_BIN" --data_type float --input_file "$QUERY_FVECS" --output_file "$QUERY_BIN"
+    fi
+fi
+
+# --- Step 7: Execute the search workload ---
 PERF_EVENTS="cache-references,cache-misses,L1-dcache-loads,L1-dcache-load-misses,l2_rqsts.all_demand_data_rd,l2_rqsts.demand_data_rd_miss,LLC-loads,LLC-load-misses,branches,branch-misses"
 PERF_LOG_PATH="$RESULT_OUTPUT_DIR/others/${DATASET}_perf_stat.log"
 echo "Performance profiling output (perf stat) will be saved to: $PERF_LOG_PATH"
@@ -132,7 +173,14 @@ perf stat -e $PERF_EVENTS -o "$PERF_LOG_PATH" \
     --is_new_trie_method "$IS_NEW_TRIE_METHOD" --is_rec_more_start "$IS_REC_MORE_START" \
     --routing_mode "$ROUTING_MODE" \
     --baseline_alg "$BASELINE_ALG" \
+    --curator_nlist "${CURATOR_NLIST:-32}" \
+    --curator_nprobe "${CURATOR_NPROBE:-16}" \
+    --curator_max_leaf_size "${CURATOR_MAX_LEAF_SIZE:-128}" \
+    --curator_search_ef "${CURATOR_SEARCH_EF:-10}" \
+    --curator_beam_size "${CURATOR_BEAM_SIZE:-1}" \
+    --curator_index_path "$CURATOR_INDEX_PATH" \
     --base_bin_file "$DATA_DIR/${DATASET}_base.bin" \
+    --base_label_file "$DATA_DIR/${DATASET}_base_labels.txt" \
     --query_bin_file "$QUERY_DIR/${DATASET}_query.bin" \
     --query_label_file "$QUERY_DIR/${DATASET}_query_labels.txt" \
     --query_group_id_file "$QUERY_DIR/${DATASET}_query_source_groups.txt" \
@@ -150,7 +198,7 @@ perf stat -e $PERF_EVENTS -o "$PERF_LOG_PATH" \
     --efs_step_slow "$EFS_STEP_SLOW" --efs_step_fast "$EFS_STEP_FAST" --lsearch_threshold "$LSEARCH_THRESHOLD" \
     --ung_distance_mode "$UNG_DISTANCE_MODE" \
     --navix_index_path "$NAVIX_INDEX_PATH" \
-    --algo_choice_csv "$QUERY_DIR/algo_choice_repeat.csv" \
+    --algo_choice_csv "${ALGO_CHOICE_CSV:-$QUERY_DIR/algo_choice_repeat.csv}" \
     --optimize_standalone_prefilter "${OPTIMIZE_STANDALONE_PREFILTER:-false}" > "$RESULT_OUTPUT_DIR/others/${DATASET}_search_output.txt" 2>&1
 
 # --- Step 7: Post-process results and compute global averages ---
@@ -162,6 +210,33 @@ if [ -f "$DETAILS_CSV" ]; then
     python3 UNG/data/average_query_details.py --input_csv "$DETAILS_CSV" --output_csv "$AVERAGE_CSV"
 else
     echo "Warning: Detail file $DETAILS_CSV was not found. Skipping global average computation."
+fi
+
+# Automatically aggregate the ELS-complexity counters when running either of
+# the two comparable UNG algorithms.  The first algorithm run only produces a
+# partial result; once its counterpart has completed, both rows are merged into
+# one dataset-level CSV.  Other algorithms are intentionally left untouched.
+if [[ "$BASELINE_ALG" == "0" || "$BASELINE_ALG" == "15" ]]; then
+    ELS_ALGO_ROOT="$(dirname "$ALGO_RESULT_DIR")"
+    if [[ "$BASELINE_ALG" == "0" ]]; then
+        ELS_OLD_DETAILS="$DETAILS_CSV"
+        ELS_NEW_DETAILS="${ELS_ALGO_ROOT}/UNG++-sorted-lng/$(basename "$RESULT_OUTPUT_DIR")/results/query_details_repeat${NUM_REPEATS}.csv"
+    else
+        ELS_NEW_DETAILS="$DETAILS_CSV"
+        ELS_OLD_DETAILS="${ELS_ALGO_ROOT}/UNG-nTfalse/$(basename "$RESULT_OUTPUT_DIR")/results/query_details_repeat${NUM_REPEATS}.csv"
+    fi
+    ELS_AVG_FILE="${SHARED_OUTPUT_DIR}/Results/ELS_complexity_average.csv"
+    if [[ -f "$ELS_OLD_DETAILS" && -f "$ELS_NEW_DETAILS" ]]; then
+        ELS_AGGREGATOR="${SCRIPT_DIR}/tools/aggregate_els_complexity.py"
+        python3 "$ELS_AGGREGATOR" \
+            --task "$QUERY_DIR_NAME" \
+            --run-id "$(basename "$RESULT_OUTPUT_DIR")" \
+            --old "$ELS_OLD_DETAILS" --new "$ELS_NEW_DETAILS" \
+            --output "$ELS_AVG_FILE"
+        echo "ELS complexity averages updated: $ELS_AVG_FILE"
+    else
+        echo "ELS complexity aggregation pending counterpart result: old=[$ELS_OLD_DETAILS], new=[$ELS_NEW_DETAILS]"
+    fi
 fi
 
 echo "All search and post-processing tasks have completed successfully."

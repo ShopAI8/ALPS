@@ -202,7 +202,11 @@ namespace ANNS
          if (label == "NaviX" || label == "NaviX-ACORN") return 4;
          if (label == "FAVOR" || label == "FAVOR-HNSW") return 12;
          if (label == "UNG+") return 8;
+         // The wide-table selector uses the label UNG++ for the sorted-LNG
+         // implementation (baseline id 15).
+         if (label == "UNG++" || label == "UNG++-sorted-lng") return 15;
          if (label == "pre-filter") return 5;
+         if (label == "Curator") return 13;
          return -1;
       }
 
@@ -1293,14 +1297,18 @@ namespace ANNS
 // #if ENABLE_ENTRY_DEBUG_OUTPUT
       auto end_trie = std::chrono::high_resolution_clock::now();
       time_trie_lookup = std::chrono::duration<double, std::milli>(end_trie - start_trie).count();
+      stats.els_trie_time = time_trie_lookup;
+      stats.els_trie_nodes = static_cast<uint64_t>(stats.trie_nodes_traversed);
 // #endif
 
       // Handle trivial cases early.
+      stats.els_C_trie = candidates.size();
       if (candidates.empty())
          return;
       if (candidates.size() == 1)
       {
          min_super_set_ids.emplace_back(candidates[0]->group_id);
+         stats.els_M_min = min_super_set_ids.size();
          return;
       }
       bool skip_filter = this->skip_els_filter;  // If true, skip filtering and return every candidate group id directly.
@@ -1352,7 +1360,16 @@ namespace ANNS
                for (auto min_group_id : filtered_ids)
                {
                   const auto &min_label_set = _group_id_to_label_set[min_group_id];
-                  if (std::includes(cur_label_set.begin(), cur_label_set.end(), min_label_set.begin(), min_label_set.end()))
+                  ++stats.els_containment_calls;
+                  auto cur_it = cur_label_set.begin();
+                  auto min_it = min_label_set.begin();
+                  while (cur_it != cur_label_set.end() && min_it != min_label_set.end()) {
+                     ++stats.els_label_steps;
+                     if (*min_it < *cur_it) break;
+                     if (!(*cur_it < *min_it)) ++min_it;
+                     ++cur_it;
+                  }
+                  if (min_it == min_label_set.end())
                   {
                      is_min = false;
                      break;
@@ -1381,7 +1398,121 @@ namespace ANNS
       stats.els_sort_time = time_sorting;
       stats.els_filter_time = time_filtering_loop;
       stats.els_total_time = function_total_time;
+      stats.els_M_min = min_super_set_ids.size();
 // #endif
+   }
+
+   // fxy_add: bitmap-driven exact ELS. F_pass = ∩ _group_attr_roaring_inv[label];
+   // minimal elements = F_pass \ ∪ Desc(g). No trie traversal, no O(Y^2) shrink.
+   void UniNavGraph::get_min_super_sets_bitmap(const std::vector<LabelType> &query_label_set,
+                                               std::vector<IdxType> &min_super_set_ids) const
+   {
+      min_super_set_ids.clear();
+
+      // Step 1: F_pass = intersection of group-roaring bitmaps over query labels.
+      roaring::Roaring f_pass;
+      bool first = true;
+      for (auto label : query_label_set)
+      {
+         auto it = _attr_to_id.find(label);
+         if (it == _attr_to_id.end())          // label absent -> no qualified group
+            return;
+         if (first) { f_pass = _group_attr_roaring_inv[it->second]; first = false; }
+         else        f_pass &= _group_attr_roaring_inv[it->second];
+         if (f_pass.isEmpty())                 // early out
+            return;
+      }
+
+      // Step 2: covered = union of proper-supersets of every qualified group.
+      roaring::Roaring covered;
+      for (uint32_t g : f_pass)
+         covered |= _lng_descendants_rb[g];    // _lng_descendants_rb[g] = proper supersets of g
+
+      // Step 3: minimal elements = F_pass \ covered.
+      f_pass -= covered;
+      for (uint32_t g : f_pass)
+         min_super_set_ids.push_back(g);
+   }
+
+   // UNG++ ELS: obtain all qualified groups by bitmap, then scan them in
+   // increasing label-set cardinality.  For each unmarked candidate, traverse
+   // the LNG downward and mark its supersets.  A shared visited array ensures
+   // each LNG node/edge is expanded at most once per query.
+   void UniNavGraph::get_min_super_sets_sorted_lng(
+       const std::vector<LabelType> &query_label_set,
+       std::vector<IdxType> &min_super_set_ids,
+       QueryStats &stats) const
+   {
+      min_super_set_ids.clear();
+      const auto total_start = std::chrono::high_resolution_clock::now();
+
+      auto bitmap_start = std::chrono::high_resolution_clock::now();
+      roaring::Roaring f_pass;
+      bool first = true;
+      for (auto label : query_label_set) {
+         auto it = _attr_to_id.find(label);
+         if (it == _attr_to_id.end()) { stats.els_A_all = 0; return; }
+         if (first) { f_pass = _group_attr_roaring_inv[it->second]; first = false; }
+         else f_pass &= _group_attr_roaring_inv[it->second];
+         if (f_pass.isEmpty()) { stats.els_A_all = 0; return; }
+      }
+      stats.els_A_all = f_pass.cardinality();
+      stats.els_bitmap_time = std::chrono::duration<double, std::milli>(
+          std::chrono::high_resolution_clock::now() - bitmap_start).count();
+
+      std::vector<IdxType> candidates;
+      candidates.reserve(stats.els_A_all);
+      for (uint32_t g : f_pass) candidates.push_back(static_cast<IdxType>(g));
+
+      auto sort_start = std::chrono::high_resolution_clock::now();
+      std::sort(candidates.begin(), candidates.end(), [&](IdxType a, IdxType b) {
+         const auto sa = _group_id_to_label_set[a].size();
+         const auto sb = _group_id_to_label_set[b].size();
+         return sa != sb ? sa < sb : a < b;
+      });
+      stats.elspp_sort_time = std::chrono::duration<double, std::milli>(
+          std::chrono::high_resolution_clock::now() - sort_start).count();
+
+      std::vector<uint8_t> marked(_num_groups + 1, 0);
+      std::vector<uint8_t> visited(_num_groups + 1, 0);
+      std::vector<uint8_t> is_candidate(_num_groups + 1, 0);
+      for (IdxType g : candidates) if (g <= _num_groups) is_candidate[g] = 1;
+
+      auto scan_start = std::chrono::high_resolution_clock::now();
+      for (IdxType g : candidates) {
+         ++stats.els_scan_count;
+         if (marked[g]) { ++stats.els_skip_count; continue; }
+         min_super_set_ids.push_back(g);
+         ++stats.els_selected_count;
+
+         auto lng_start = std::chrono::high_resolution_clock::now();
+         std::queue<IdxType> q;
+         if (g <= _num_groups && !visited[g]) { visited[g] = 1; q.push(g); }
+         while (!q.empty()) {
+            IdxType cur = q.front(); q.pop();
+            ++stats.els_lng_nodes;
+            if (cur < is_candidate.size() && is_candidate[cur]) {
+               ++stats.els_mark_tests;
+               if (!marked[cur]) { marked[cur] = 1; ++stats.els_new_marks; }
+               else ++stats.els_duplicate_marks;
+            }
+            if (!_label_nav_graph || cur >= _label_nav_graph->out_neighbors.size()) continue;
+            for (IdxType child : _label_nav_graph->out_neighbors[cur]) {
+               ++stats.els_lng_edges;
+               if (child <= _num_groups && !visited[child]) {
+                  visited[child] = 1;
+                  q.push(child);
+               }
+            }
+         }
+         stats.elspp_lng_time += std::chrono::duration<double, std::milli>(
+             std::chrono::high_resolution_clock::now() - lng_start).count();
+      }
+      stats.elspp_scan_time = std::chrono::duration<double, std::milli>(
+          std::chrono::high_resolution_clock::now() - scan_start).count();
+      stats.els_M_min = min_super_set_ids.size();
+      stats.elspp_total_time = std::chrono::duration<double, std::milli>(
+          std::chrono::high_resolution_clock::now() - total_start).count();
    }
 
    // Store candidate groups with scores so sorting stays simple.
@@ -4067,10 +4198,10 @@ namespace ANNS
          std::cout << "- Trie Method Selector is warm." << std::endl;
       }
 
-      // 预热SODA (特征数为 4)
+      // 预热 SODA selector (GlobalPpass, NumDescendants, QuerySize)
       if (_smart_route_selector) {
          std::cout << "- Warming up Smart Route Selector..." << std::endl;
-         std::vector<float> dummy(4, 0.0f); // <--- 关键修改：这里的 3 改成了 4
+         std::vector<float> dummy(3, 0.0f);
          _smart_route_selector->predict(dummy);
          std::cout << "- Smart Route Selector is warm." << std::endl;
       }
@@ -4132,6 +4263,7 @@ void UniNavGraph::calculate_query_features_only(
         if (!query_labels.empty())
         {
             stats.candidate_set_size = _trie_index.get_candidate_count_for_label(query_labels.back());
+            stats.trie_I_lmax = stats.candidate_set_size;
         }
         const auto &trie_metrics = _trie_static_metrics;
         stats.trie_total_nodes = trie_metrics.total_nodes;
@@ -4622,17 +4754,24 @@ void UniNavGraph::calculate_query_features_only(
 
       // --- 模式 0: Baseline ---
       if (routing_mode == 0) {
-         if (baseline_alg == 0 || baseline_alg == 1 || baseline_alg == 8) { // 如果是 UNG 家族，算好 ELS
+         if (baseline_alg == 0 || baseline_alg == 1 || baseline_alg == 8 || baseline_alg == 14 || baseline_alg == 15) {
                bool use_nT_true = (baseline_alg == 1);
                stats.is_trie_recursive = use_nT_true; // 记录: Baseline使用的是递归还是非递归
-               
+
                auto els_start = std::chrono::high_resolution_clock::now();
-               static std::atomic<int> counter{0};
-               // 注意这里传入 use_nT_true，直接覆盖全局的 is_new_trie_method
-               get_min_super_sets_debug(query_labels, entry_group_ids, false, true, counter, use_nT_true, is_rec_more_start, stats, false);
+               if (baseline_alg == 15) {
+                  get_min_super_sets_sorted_lng(query_labels, entry_group_ids, stats);
+               } else if (baseline_alg == 14 && !query_labels.empty()) {
+                  // UNG++: bitmap-driven exact ELS（对拍已验证与 trie 版结果一致，无 trie 遍历）
+                  get_min_super_sets_bitmap(query_labels, entry_group_ids);
+               } else {
+                  static std::atomic<int> counter{0};
+                  // 注意这里传入 use_nT_true，直接覆盖全局的 is_new_trie_method
+                  get_min_super_sets_debug(query_labels, entry_group_ids, false, true, counter, use_nT_true, is_rec_more_start, stats, false);
+               }
                stats.get_min_super_sets_time_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - els_start).count();
                stats.num_entry_points = entry_group_ids.size();
-         } 
+         }
          return baseline_alg;
       }
 
@@ -4675,27 +4814,26 @@ void UniNavGraph::calculate_query_features_only(
          auto pred_start = std::chrono::high_resolution_clock::now();
          int router_decision = 0; 
          if (_smart_route_selector) {
-               // 【关键修改】特征输入顺序严格对齐 Python: Ppass, Descendants, QuerySize, CandSize
-               std::vector<float> features = {f_ppass, static_cast<float>(num_descendants), f_qsize, f_cand};
+               // 特征输入顺序严格对齐 Python: Ppass, Descendants, QuerySize
+               std::vector<float> features = {f_ppass, static_cast<float>(num_descendants), f_qsize};
                float pred_val = _smart_route_selector->predict(features);
                router_decision = static_cast<int>(std::round(pred_val));
          }
          stats.route_pred_time_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - pred_start).count();
 
          // 3. 根据预测结果进行分流映射
-         // 新语义: 0 -> 第三类算法, 1 -> UNG+, 2 -> pre-filter
+         // 新语义: 0 -> 第三类算法, 1 -> UNG++, 2 -> pre-filter
          if (router_decision == 0)
             return _smart_route_target_alg_id;
          if (router_decision == 2)
             return 5;
          if (router_decision == 1) {
                auto els_start = std::chrono::high_resolution_clock::now();
-               static std::atomic<int> counter{0};
-               get_min_super_sets_debug(query_labels, entry_group_ids, false, true, counter, false, is_rec_more_start, stats, false);
+               get_min_super_sets_sorted_lng(query_labels, entry_group_ids, stats);
                stats.get_min_super_sets_time_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - els_start).count();
                stats.num_entry_points = entry_group_ids.size();
                
-               return 8; // 映射到 UNG+ 算法
+               return 15; // 映射到 UNG++-sorted-lng 算法
          }
       }
 
@@ -4854,6 +4992,24 @@ void UniNavGraph::calculate_query_features_only(
          
          return 0; 
       }
+
+      // --- Mode 8: ALPS-fixed (fixed thresholds over exact GlobalPpass) ---
+      // >39.9%: FAVOR-HNSW; [1.2%, 39.9%]: UNG++-sorted-lng; <1.2%: pre-filter.
+      if (routing_mode == 8) {
+         if (f_ppass > 0.399f) {
+            return 12;
+         }
+         if (f_ppass < 0.012f) {
+            return 5;
+         }
+
+         auto els_start = std::chrono::high_resolution_clock::now();
+         get_min_super_sets_sorted_lng(query_labels, entry_group_ids, stats);
+         stats.get_min_super_sets_time_ms = std::chrono::duration<double, std::milli>(
+             std::chrono::high_resolution_clock::now() - els_start).count();
+         stats.num_entry_points = entry_group_ids.size();
+         return 15;
+      }
       
       return 0; // Fallback
    }
@@ -4913,9 +5069,15 @@ void UniNavGraph::calculate_query_features_only(
             stats.algo_choice = final_algo_choice;
 
             auto prep_start = std::chrono::high_resolution_clock::now();
-            if (final_algo_choice == 0 || final_algo_choice == 1 || final_algo_choice == 8) {
-               static std::atomic<int> counter{0};
-               get_min_super_sets_debug(query_labels, entry_group_ids, false, true, counter, (final_algo_choice == 1), is_rec_more_start, stats, false);
+            if (final_algo_choice == 0 || final_algo_choice == 1 || final_algo_choice == 8 || final_algo_choice == 14 || final_algo_choice == 15) {
+               if (final_algo_choice == 15) {
+                  get_min_super_sets_sorted_lng(query_labels, entry_group_ids, stats);
+               } else if (final_algo_choice == 14 && !query_labels.empty()) {
+                  get_min_super_sets_bitmap(query_labels, entry_group_ids);
+               } else {
+                  static std::atomic<int> counter{0};
+                  get_min_super_sets_debug(query_labels, entry_group_ids, false, true, counter, (final_algo_choice == 1), is_rec_more_start, stats, false);
+               }
             } else if (final_algo_choice == 5) {
                if (query_labels.empty()) {
                      roar_res.addRange(0, _num_points);
@@ -4953,15 +5115,18 @@ void UniNavGraph::calculate_query_features_only(
          auto feature_start = std::chrono::high_resolution_clock::now();
          stats.query_length = query_labels.size();
          stats.candidate_set_size = query_labels.empty() ? 0 : get_candidate_count_for_label(query_labels.back());
+         stats.trie_I_lmax = stats.candidate_set_size;
          stats.trie_total_nodes = _trie_static_metrics.total_nodes;
 
-            if (routing_mode == 4 || (routing_mode == 0 && baseline_alg == 5)) {
-               auto mask_start = std::chrono::high_resolution_clock::now(); 
+            if (routing_mode == 4 || (routing_mode == 0 && (baseline_alg == 5 || baseline_alg == 13))) {
+               // Curator (13) shares the exact same bitset filter map (bipartite
+               // graph path) and the same measured cost as the pre-filter baseline.
+               auto mask_start = std::chrono::high_resolution_clock::now();
                exact_mask_ptr = &get_exact_cand_size_and_mask(query_labels, stats.exact_cand_size, use_optimized);
-               stats.bitmap_time_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - mask_start).count(); 
+               stats.bitmap_time_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - mask_start).count();
                stats.global_p_pass = static_cast<float>(stats.exact_cand_size) / _num_points;
                has_exact_mask = true;
-            } else if (routing_mode == 1 || routing_mode == 2 || routing_mode == 3 || routing_mode == 6) {
+            } else if (routing_mode == 1 || routing_mode == 2 || routing_mode == 3 || routing_mode == 6 || routing_mode == 8) {
             auto mask_start = std::chrono::high_resolution_clock::now(); 
             if (query_labels.empty()) {
                roar_res.addRange(0, _num_points);
@@ -5018,12 +5183,18 @@ void UniNavGraph::calculate_query_features_only(
             // 2. 数据兜底：由于跳过了 determine_routing_strategy，必须在这里补全后续搜索必需的前置数据
 
             // 兜底 A: 如果被强制分配到 UNG 家族（0, 1, 或 8），但入口点组还没算，需要补算 ELS
-            if ((final_algo_choice == 0 || final_algo_choice == 1 || final_algo_choice == 8) && entry_group_ids.empty()) {
+            if ((final_algo_choice == 0 || final_algo_choice == 1 || final_algo_choice == 8 || final_algo_choice == 14 || final_algo_choice == 15) && entry_group_ids.empty()) {
                bool use_nT_true = (final_algo_choice == 1);
                stats.is_trie_recursive = use_nT_true;
                auto els_start = std::chrono::high_resolution_clock::now();
-               static std::atomic<int> counter{0};
+               if (final_algo_choice == 15) {
+                  get_min_super_sets_sorted_lng(query_labels, entry_group_ids, stats);
+               } else if (final_algo_choice == 14 && !query_labels.empty()) {
+                  get_min_super_sets_bitmap(query_labels, entry_group_ids);
+               } else {
+                  static std::atomic<int> counter{0};
                   get_min_super_sets_debug(query_labels, entry_group_ids, false, true, counter, use_nT_true, is_rec_more_start, stats, false);
+               }
                stats.get_min_super_sets_time_ms = std::chrono::duration<double, std::milli>(
                    std::chrono::high_resolution_clock::now() - els_start).count();
                stats.num_entry_points = entry_group_ids.size();
@@ -5086,7 +5257,7 @@ void UniNavGraph::calculate_query_features_only(
          // ======================= STAGE 2: EXECUTION STAGE =======================
          
          // Apply entry point expansion logic if needed for the UNG path
-         if (is_ung_more_entry && (final_algo_choice == 0 || final_algo_choice == 1 || final_algo_choice == 8))
+         if (is_ung_more_entry && (final_algo_choice == 0 || final_algo_choice == 1 || final_algo_choice == 8 || final_algo_choice == 14 || final_algo_choice == 15))
          {
             IdxType true_group_id = 0;
             if (id < true_query_group_ids.size())
@@ -5296,6 +5467,33 @@ void UniNavGraph::calculate_query_features_only(
                return;
             }
          }
+         else if (final_algo_choice == 13) // Curator
+         {
+            if (!_curator_ctx.ready) {
+               std::cerr << "ERROR: Curator index not ready. Skipping query " << id << std::endl;
+               for (auto k = 0; k < K; ++k) results[id * K + k].first = -1;
+               return;
+            }
+            CuratorSearchStats cs;
+            // Reuse the Stage-1 bitset filter map (same bipartite-graph path and
+            // cost as pre-filter). Fall back to the wrapper's own inverted index
+            // only when no mask was computed for this query.
+            curator_search_query_detailed(
+                _curator_ctx, id, query, query_labels, K,
+                &results[id * K], cs,
+                exact_mask_ptr);
+            // Stage-1 mask time is already in stats.bitmap_time_ms; the wrapper
+            // only adds its own phase-1 cost (mask extraction, or the fallback
+            // intersection). Accumulate instead of overwriting.
+            stats.bitmap_time_ms += cs.bitmap_time_ms;
+            stats.core_search_time_ms = cs.search_time_ms;
+            stats.search_time_ms = cs.bitmap_time_ms + cs.search_time_ms;
+            if (exact_mask_ptr == nullptr) {
+               stats.exact_cand_size = cs.exact_cand_size;
+               stats.global_p_pass = cs.global_p_pass;
+            }
+            stats.num_distance_calcs = 0;
+         }
          else if (final_algo_choice >= 2 && final_algo_choice <= 6 && final_algo_choice != 5) // ACORN 家族 (2,3,4,6)
          {
             auto search_time_start_ms = std::chrono::high_resolution_clock::now();
@@ -5480,7 +5678,7 @@ void UniNavGraph::calculate_query_features_only(
             }
             stats.search_time_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - search_time_start_ms).count();
          }
-         else if (final_algo_choice == 0 || final_algo_choice == 1 || final_algo_choice == 8) // UNG 家族
+         else if (final_algo_choice == 0 || final_algo_choice == 1 || final_algo_choice == 8 || final_algo_choice == 14 || final_algo_choice == 15)
          {
             // --- Execute UNG Search ---
             auto search_time_start_ms = std::chrono::high_resolution_clock::now();
@@ -5538,6 +5736,8 @@ void UniNavGraph::calculate_query_features_only(
          }
 
          // ======================= STAGE 3: FINALIZE RESULTS =======================
+         // Curator and FAVOR write results directly — skip ID remapping
+         if (final_algo_choice != 13 && final_algo_choice != 11 && final_algo_choice != 12) {
          for (auto k = 0; k < K; ++k)
          {
             if (k < cur_result.size())
@@ -5558,6 +5758,7 @@ void UniNavGraph::calculate_query_features_only(
             {
                results[id * K + k].first = -1;
             }
+         }
          }
 
       double pure_search_time = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - total_search_start_time).count();
@@ -5763,7 +5964,15 @@ void UniNavGraph::calculate_query_features_only(
       auto pred_start = std::chrono::high_resolution_clock::now();
          if (!batch_features.empty()) {
          if (_smart_route_selector) {
-            std::vector<float> batch_preds = _smart_route_selector->predict_batch(batch_features);
+            // The SODA selector is trained with three features. Keep the
+            // fourth CandSize value in batch_features for the legacy
+            // FastSmartRoute fallback, but omit it for this selector.
+            std::vector<std::vector<float>> smart_batch_features;
+            smart_batch_features.reserve(batch_features.size());
+            for (const auto& row : batch_features) {
+               smart_batch_features.emplace_back(row.begin(), row.begin() + std::min<size_t>(3, row.size()));
+            }
+            std::vector<float> batch_preds = _smart_route_selector->predict_batch(smart_batch_features);
 
             // 顺序与 target_ids 对应，直接回写
             for (size_t i = 0; i < target_ids.size(); ++i) {
@@ -5772,7 +5981,7 @@ void UniNavGraph::calculate_query_features_only(
 
                   if (router_decision == 0) final_choices[id] = _smart_route_target_alg_id;
                   else if (router_decision == 2) final_choices[id] = 5;
-                  else final_choices[id] = 8;
+                  else final_choices[id] = 15;
             }
          } else if (_fast_route_single_selector) {
             // SODA 模型缺失时，回退到 FastSmartRoute 单模型，避免 algo choice 保持 -1。
@@ -6989,15 +7198,65 @@ void UniNavGraph::calculate_query_features_only(
       }
 #endif
 
+      // FAVOR is built by build_hybrid.sh as a sibling of index_files.  Unlike
+      // the UNG files above, it is not part of index_path_prefix itself, so use
+      // the already-resolved index root to find and deserialize it here.
       _favor_ready = false;
       _favor_index.reset();
+      _favor_space.reset();
       _favor_build_time_ms = -1.0;
       _favor_serialized_index_size_bytes = 0;
       uint64_t favor_index_sizeof_bytes = 0;
-      // FAVOR baseline is built explicitly by build_hybrid.sh now.
-      // Keep the metadata fields for downstream scripts, but do not build or load
-      // FAVOR inside the UNG build path anymore.
-      meta_data["favor_enabled"] = "0";
+      const bool need_favor_index =
+          is_smartroute_mode || routing_mode == 8 ||
+          (routing_mode == 0 && (baseline_alg == 11 || baseline_alg == 12));
+      const fs::path favor_dir = index_root_dir / "FAVOR";
+      const fs::path favor_index_file = favor_dir / "favor.index";
+
+      if (need_favor_index) {
+         if (_base_storage == nullptr || _base_storage->get_dim() == 0) {
+            std::cerr << "[FAVOR] Cannot load index: base storage is unavailable." << std::endl;
+         } else if (!fs::exists(favor_index_file)) {
+            std::cerr << "[FAVOR] Index file not found: " << favor_index_file.string() << std::endl;
+         } else {
+            try {
+               const size_t dim = static_cast<size_t>(_base_storage->get_dim());
+               const size_t max_elements = static_cast<size_t>(_base_storage->get_num_points());
+               _favor_space = std::make_unique<hnswlib::L2Space>(dim);
+               _favor_index = std::make_unique<favor::FAVOR<float>>(
+                   _favor_space.get(), favor_index_file.string(), false, max_elements, 100);
+
+               if (_favor_index->cur_element_count != max_elements) {
+                  std::cerr << "[FAVOR] Loaded index count mismatch: index="
+                            << _favor_index->cur_element_count << ", base=" << max_elements
+                            << ". FAVOR is disabled." << std::endl;
+                  _favor_index.reset();
+                  _favor_space.reset();
+               } else {
+                  _favor_ready = true;
+                  _favor_serialized_index_size_bytes =
+                      static_cast<uint64_t>(fs::file_size(favor_index_file));
+                  favor_index_sizeof_bytes = estimate_favor_logical_size_bytes(*_favor_index);
+
+                  FavorCacheMeta favor_meta;
+                  if (load_favor_meta((favor_dir / "favor.meta").string(), favor_meta)) {
+                     _favor_build_time_ms = favor_meta.build_time_ms;
+                  }
+
+                  std::cout << "[FAVOR] Loaded index from " << favor_index_file.string()
+                            << " (elements=" << _favor_index->cur_element_count
+                            << ", dim=" << dim << ")" << std::endl;
+               }
+            } catch (const std::exception& e) {
+               std::cerr << "[FAVOR] Failed to load index from " << favor_index_file.string()
+                         << ": " << e.what() << std::endl;
+               _favor_index.reset();
+               _favor_space.reset();
+            }
+         }
+      }
+
+      meta_data["favor_enabled"] = _favor_ready ? "1" : "0";
       meta_data["favor_build_time(ms)"] = std::to_string(_favor_build_time_ms);
       meta_data["favor_index_sizeof_bytes"] = std::to_string(favor_index_sizeof_bytes);
       meta_data["favor_index_sizeof_mb"] =
@@ -7384,5 +7643,37 @@ void UniNavGraph::calculate_query_features_only(
       // return as MB
       _index_size /= 1024 * 1024;
       _index_size_add_rb /= 1024 * 1024;
+   }
+
+   // =========================================================================
+   // Curator build (thin wrapper, like FAVOR)
+   // =========================================================================
+
+   void UniNavGraph::configure_curator(int nlist, int nprobe, int max_leaf_size, int search_ef, int beam_size) {
+       _curator_ctx.nlist = nlist;
+       _curator_ctx.nprobe = nprobe;
+       _curator_ctx.max_leaf_size = max_leaf_size;
+       _curator_ctx.search_ef = search_ef;
+       _curator_ctx.beam_size = beam_size;
+   }
+
+   void UniNavGraph::build_curator(const std::string& save_path) {
+       if (_curator_ctx.ready) return;
+
+       // Curator-only mode skips index.load(), so the framework structures the
+       // Stage-1 bitset filter map depends on (_num_points, _attr_to_id,
+       // _vector_attr_graph) may not exist yet. Build them here (index-build
+       // phase, not counted as query time) — same bipartite-graph path as the
+       // pre-filter baseline.
+       if (_vector_attr_graph.empty()) {
+           _num_points = _base_storage->get_num_points();
+           build_vector_and_attr_graph();
+       }
+
+       if (!save_path.empty()) {
+           curator_load_index(_curator_ctx, _base_storage, save_path);
+       } else {
+           curator_build_index(_curator_ctx, _base_storage);
+       }
    }
 }

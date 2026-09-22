@@ -34,8 +34,8 @@
                   "acorn_efs_step_fast": 200
                },
                "algorithms": [
-                  "SODA",
-                  "SODA+"
+                  "ALPS",
+                  "ALPS+"
                ]
             }
          ]
@@ -86,8 +86,8 @@
                   "acorn_efs_step_fast": 200
                },
                "algorithms": [
-                  "SODA",
-                  "SODA+",
+                  "ALPS",
+                  "ALPS+",
                   "ACORN-gamma",
                   "ACORN-1"
                ]
@@ -100,8 +100,8 @@
                   "acorn_efs_step_fast": 200
                },
                "algorithms": [
-                  "SODA",
-                  "SODA+",
+                  "ALPS",
+                  "ALPS+",
                   "ACORN-gamma",
                   "ACORN-1"
                ]
@@ -114,8 +114,8 @@
                   "acorn_efs_step_fast": 200
                },
                "algorithms": [
-                  "SODA",
-                  "SODA+",
+                  "ALPS",
+                  "ALPS+",
                   "ACORN-gamma",
                   "ACORN-1"
                ]
@@ -128,8 +128,8 @@
                   "acorn_efs_step_fast": 200
                },
                "algorithms": [
-                  "SODA",
-                  "SODA+",
+                  "ALPS",
+                  "ALPS+",
                   "ACORN-gamma",
                   "ACORN-1"
                ]

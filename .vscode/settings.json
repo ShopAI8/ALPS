@@ -1,7 +1,0 @@
-{
-    "compareFolders.excludeFilter": [
-        "/exp.sh",
-        "/DataTools/other-pic"
-    ],
-    "cmake.sourceDirectory": "/home/sunyahui/ljk/FilterVector/FilterVectorCode/ACORN"
-}
