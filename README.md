@@ -1,4 +1,4 @@
-# Filtered Approximate Nearest Neighbor Search on Vectors with Diverse Labels
+# Efficient Filtered Vector Search with Diverse Labels: A Trie-Free and Adaptive Routing Approach
 
 This repository provides **ALPS**, an enhanced implementation for **Filtered Approximate Nearest Neighbor Search (Filtered ANNS)**. ALPS improves **UNG (Unified Navigating Graph)** with an accelerated variant named **TFNG**, and further integrates the core ideas of **TFNG**, **FAVOR**, and **Pre-Filtering**. It introduces a new **AI-based intelligent routing** mechanism that adaptively schedules algorithms using a machine learning model. In addition, the improved version, **ALPS+**, addresses cache thrashing caused by frequent switching among algorithms.
 
