@@ -32,7 +32,10 @@ except ImportError:
 ## "Amazon","BookReviews", "Genome", "Music", "Reviews", "Tiktok", "VariousImg", "Laion"
 DATASET_LIST = ["Amazon", "BookReviews", "Genome", "Music", "Reviews", "Tiktok", "VariousImg", "Laion"]
 GENERALIZATION_TARGET_DATASETS = DATASET_LIST.copy()
-BASE_DIR = "/noraiddata/lijiakang/FilterVector/FilterVectorResults"
+BASE_DIR = os.environ.get(
+    "ALPS_RESULTS_DIR",
+    "/noraiddata/lijiakang/FilterVector/FilterVectorResults"
+)
 EDA_ROOT_DIR = os.path.join(BASE_DIR, "EDA_Plots_try")
 
 # MODELS_TO_TRY = ["RandomForest", "XGBoost", "LightGBM", "DecisionTree"]

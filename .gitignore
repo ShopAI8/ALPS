@@ -6,6 +6,7 @@ UNG/codes/build/
 /knowhere/build/
 /knowhere/**/build/
 Dockerfile
+!/Dockerfile
 FAVOR/build/
 FAVOR/data/
 FAVOR/tmp/

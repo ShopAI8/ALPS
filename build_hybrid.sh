@@ -12,6 +12,7 @@
 
 set -euo pipefail
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+BUILD_JOBS="${BUILD_JOBS:-$(nproc)}"
 
 # Use a recent cmake (NaviX requires >=3.24, system has 3.22)
 # Prefer the pip-installed one in ~/.local/bin over the system /usr/bin.
@@ -81,9 +82,10 @@ if [ ! -f "${NAVIX_BUILD_DIR}/faiss_navix/libfaiss.a" ] && [ ! -f "${NAVIX_BUILD
         -DFAISS_OPT_LEVEL=avx2 \
         -DFAISS_ENABLE_GPU=OFF \
         -DFAISS_ENABLE_PYTHON=OFF \
+        -DFAISS_ENABLE_EXTRAS=OFF \
         -DBUILD_TESTING=OFF \
         -DCMAKE_BUILD_TYPE=Release
-    make -C "$NAVIX_BUILD_DIR" -j
+    make -C "$NAVIX_BUILD_DIR" -j"$BUILD_JOBS"
 else
     echo "[INFO] NaviX library found."
 fi
@@ -130,7 +132,7 @@ $CMAKE -S "${SCRIPT_DIR}/UNG/codes" -B "$UNG_BUILD_DIR" \
     ${KNOWHERE_FLAG} \
     -DKNOWHERE_INCLUDE_DIR="${KNOWHERE_INCLUDE_DIR}" \
     -DKNOWHERE_LIBRARY="${KNOWHERE_LIBRARY}"
-make -C "$UNG_BUILD_DIR" -j
+make -C "$UNG_BUILD_DIR" -j"$BUILD_JOBS"
 
 UNG_EXECUTABLE="${UNG_BUILD_DIR}/apps/build_UNG_index"
 if [[ ! -x "$UNG_EXECUTABLE" ]]; then
@@ -155,7 +157,7 @@ if [ ! -f "$ACORN_EXECUTABLE" ]; then
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=/tmp/googletest_src
-    make -C "$ACORN_BUILD_DIR" -j test_acorn
+    make -C "$ACORN_BUILD_DIR" -j"$BUILD_JOBS" test_acorn
 else
     echo "[INFO] ACORN executable found."
 fi
@@ -181,7 +183,7 @@ if [ ! -f "$FAVOR_EXECUTABLE" ] || [ "$FAVOR_BUILD_SOURCE" -nt "$FAVOR_EXECUTABL
     $CMAKE -S "$FAVOR_SOURCE_DIR" -B "$FAVOR_BUILD_DIR" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-    make -C "$FAVOR_BUILD_DIR" -j build_index
+    make -C "$FAVOR_BUILD_DIR" -j"$BUILD_JOBS" build_index
 else
     echo "[INFO] FAVOR executable found."
 fi

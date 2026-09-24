@@ -164,10 +164,10 @@ fi
 # --- Step 7: Execute the search workload ---
 PERF_EVENTS="cache-references,cache-misses,L1-dcache-loads,L1-dcache-load-misses,l2_rqsts.all_demand_data_rd,l2_rqsts.demand_data_rd_miss,LLC-loads,LLC-load-misses,branches,branch-misses"
 PERF_LOG_PATH="$RESULT_OUTPUT_DIR/others/${DATASET}_perf_stat.log"
-echo "Performance profiling output (perf stat) will be saved to: $PERF_LOG_PATH"
-
-perf stat -e $PERF_EVENTS -o "$PERF_LOG_PATH" \
-"$BUILD_DIR"/apps/search_UNG_index \
+SEARCH_LOG_PATH="$RESULT_OUTPUT_DIR/others/${DATASET}_search_output.txt"
+read -r -a LSEARCH_ARGS <<< "$LSEARCH_VALUES"
+SEARCH_COMMAND=(
+  "$BUILD_DIR/apps/search_UNG_index"
     --data_type float  --dataset "$DATASET" --dist_fn L2 --num_threads "$NUM_THREADS" --K "$K" --num_repeats "$NUM_REPEATS" \
     --is_new_method true \
     --is_new_trie_method "$IS_NEW_TRIE_METHOD" --is_rec_more_start "$IS_REC_MORE_START" \
@@ -191,7 +191,7 @@ perf stat -e $PERF_EVENTS -o "$PERF_LOG_PATH" \
     --selector_modle_prefix "${MODEL_PATH}" \
     --scenario containment \
     --num_entry_points "$NUM_ENTRY_POINTS" \
-    --Lsearch $LSEARCH_VALUES \
+    --Lsearch "${LSEARCH_ARGS[@]}" \
     --lsearch_start "$LSEARCH_START" \
     --lsearch_step "$LSEARCH_STEP" \
     --efs_start "$EFS_START" \
@@ -199,7 +199,21 @@ perf stat -e $PERF_EVENTS -o "$PERF_LOG_PATH" \
     --ung_distance_mode "$UNG_DISTANCE_MODE" \
     --navix_index_path "$NAVIX_INDEX_PATH" \
     --algo_choice_csv "${ALGO_CHOICE_CSV:-$QUERY_DIR/algo_choice_repeat.csv}" \
-    --optimize_standalone_prefilter "${OPTIMIZE_STANDALONE_PREFILTER:-false}" > "$RESULT_OUTPUT_DIR/others/${DATASET}_search_output.txt" 2>&1
+    --optimize_standalone_prefilter "${OPTIMIZE_STANDALONE_PREFILTER:-false}"
+)
+
+# Hardware counters are normally unavailable in an unprivileged container.
+# Use them when possible, otherwise run the exact same search command directly.
+if [[ "${ALPS_ENABLE_PERF:-auto}" != "0" ]] \
+   && command -v perf >/dev/null 2>&1 \
+   && perf stat -e task-clock true >/dev/null 2>&1; then
+    echo "Performance profiling output (perf stat) will be saved to: $PERF_LOG_PATH"
+    perf stat -e "$PERF_EVENTS" -o "$PERF_LOG_PATH" \
+        "${SEARCH_COMMAND[@]}" > "$SEARCH_LOG_PATH" 2>&1
+else
+    echo "[INFO] perf is disabled or unavailable; running search without hardware counters."
+    "${SEARCH_COMMAND[@]}" > "$SEARCH_LOG_PATH" 2>&1
+fi
 
 # --- Step 7: Post-process results and compute global averages ---
 echo "Computing global averages across all query-level metrics..."

@@ -9,6 +9,12 @@ NaviX/build
 UNG/build
 UNG/codes/build
 knowhere/build
+UNG/codes/third_party/CRoaring/build
+
+log/
+*.pdf
+__pycache__/
+*.py[cod]
 
 build_para_*
 
@@ -17,5 +23,6 @@ log_th-K-split
 *.o
 *.so
 *.a
+!UNG/codes/third_party/onnxruntime-linux-x64-1.16.3/lib/libonnxruntime.so*
 *.pyc
 __pycache__

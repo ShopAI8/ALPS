@@ -35,7 +35,15 @@ while read -r dataset_config; do
     
     DATA_DIR=$(echo "$SHARED_CONFIG" | jq -r '.data_dir')
     BASE_OUTPUT_DIR=$(echo "$SHARED_CONFIG" | jq -r '.output_dir')
-    BUILD_MODE=$(echo "$SHARED_CONFIG" | jq -r '.build_mode')
+    # Container-friendly overrides. The JSON files can keep the original host
+    # paths while Docker mounts datasets at /data and outputs at /results.
+    if [[ -n "${ALPS_DATA_ROOT:-}" ]]; then
+        DATA_DIR="${ALPS_DATA_ROOT%/}/${DATASET}"
+    fi
+    if [[ -n "${ALPS_OUTPUT_ROOT:-}" ]]; then
+        BASE_OUTPUT_DIR="${ALPS_OUTPUT_ROOT%/}"
+    fi
+    BUILD_MODE="${ALPS_BUILD_MODE:-$(echo "$SHARED_CONFIG" | jq -r '.build_mode')}"
     MAX_DEGREE=$(echo "$SHARED_CONFIG" | jq -r '.max_degree')
     LBUILD=$(echo "$SHARED_CONFIG" | jq -r '.Lbuild')
     ALPHA=$(echo "$SHARED_CONFIG" | jq -r '.alpha')
@@ -71,9 +79,16 @@ while read -r dataset_config; do
 
     # Resolve the project root from PROJECT_ROOT, or infer it from this script.
     PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
-    export UNG_BUILD_DIR="${PROJECT_ROOT}/build_para_${DATASET}/ung"
-    export ACORN_BUILD_DIR="${PROJECT_ROOT}/build_para_${DATASET}/acorn"
-    export NAVIX_BUILD_DIR="${PROJECT_ROOT}/build_para_${DATASET}/navix"
+    if [[ -n "${ALPS_BUILD_ROOT:-}" ]]; then
+        export UNG_BUILD_DIR="${ALPS_BUILD_ROOT%/}/ung"
+        export ACORN_BUILD_DIR="${ALPS_BUILD_ROOT%/}/acorn"
+        export NAVIX_BUILD_DIR="${ALPS_BUILD_ROOT%/}/navix"
+        export FAVOR_BUILD_DIR="${ALPS_BUILD_ROOT%/}/favor"
+    else
+        export UNG_BUILD_DIR="${PROJECT_ROOT}/build_para_${DATASET}/ung"
+        export ACORN_BUILD_DIR="${PROJECT_ROOT}/build_para_${DATASET}/acorn"
+        export NAVIX_BUILD_DIR="${PROJECT_ROOT}/build_para_${DATASET}/navix"
+    fi
     BUILD_ONLY_INDEX_PREPARED=false
 
     # Resolve Knowhere paths. Prefer this checkout, then reuse the shared
@@ -293,7 +308,13 @@ while read -r dataset_config; do
                --algo_choice_csv "$EFFECTIVE_ALGO_CHOICE_CSV"
                     
             echo "--- Finished: Dataset=[$DATASET], Query=[$QUERY_DIR_NAME], Algorithm=[$ALGORITHM_NAME] ---"
-        done < <(echo "$task" | jq -r '.algorithms[]')
+        done < <(echo "$task" | jq -r --arg selected "${ALPS_ALGORITHMS:-}" '
+            .algorithms[]
+            | select(
+                $selected == ""
+                or (. as $algorithm | ($selected | split(",") | index($algorithm)) != null)
+              )
+        ')
     done < <(echo "$dataset_config" | jq -c '.tasks[]')
 done < <(jq -c --arg dataset_filter "${EXPERIMENT_DATASET_FILTER:-}" \
     '.experiments[] | select($dataset_filter == "" or .dataset_name == $dataset_filter)' "$CONFIG_FILE")
