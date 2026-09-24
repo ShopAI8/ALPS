@@ -52,6 +52,7 @@ FilterVectorCode/
 ├── UNG/                    # UNG / TFNG implementation and data-processing scripts
 ├── knowhere/               # Dependency for the Milvus baseline
 ├── FAVOR/                  # Dependency for the FAVOR baseline
+├── Genome_model/           # Routering model for Genome
 ├── data/                   # Dataset directory
 ├── experiment_json/        # Example experiment configurations
 ├── build_hybrid.sh         # Unified build script
