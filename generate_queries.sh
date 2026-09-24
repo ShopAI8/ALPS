@@ -16,7 +16,7 @@ fi
 
 # --- Validate command-line arguments ---
 CONFIG_FILE="$1"
-BUILD_DIR="/home/fengxiaoyao/FilterVector/build_gene"
+BUILD_DIR="/your_path/build_gene"
 
 if [ -z "$CONFIG_FILE" ] || [ -z "$BUILD_DIR" ]; then
     echo "Error: Insufficient arguments."
