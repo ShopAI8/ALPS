@@ -224,7 +224,7 @@ def generate_features(df):
     X['GlobalPpass'] = df['GlobalPpass']
     X['NumDescendants'] = df['NumDescendants']
     X['QuerySize'] = df['QuerySize']
-    X['CandSize'] = df['CandSize']
+    # X['CandSize'] = df['CandSize']
     
     # Normalize invalid values (NaN, inf).
     X.replace([np.inf, -np.inf], np.nan, inplace=True); X.fillna(0, inplace=True)
