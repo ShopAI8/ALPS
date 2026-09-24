@@ -226,31 +226,5 @@ else
     echo "Warning: Detail file $DETAILS_CSV was not found. Skipping global average computation."
 fi
 
-# Automatically aggregate the ELS-complexity counters when running either of
-# the two comparable UNG algorithms.  The first algorithm run only produces a
-# partial result; once its counterpart has completed, both rows are merged into
-# one dataset-level CSV.  Other algorithms are intentionally left untouched.
-if [[ "$BASELINE_ALG" == "0" || "$BASELINE_ALG" == "15" ]]; then
-    ELS_ALGO_ROOT="$(dirname "$ALGO_RESULT_DIR")"
-    if [[ "$BASELINE_ALG" == "0" ]]; then
-        ELS_OLD_DETAILS="$DETAILS_CSV"
-        ELS_NEW_DETAILS="${ELS_ALGO_ROOT}/UNG++-sorted-lng/$(basename "$RESULT_OUTPUT_DIR")/results/query_details_repeat${NUM_REPEATS}.csv"
-    else
-        ELS_NEW_DETAILS="$DETAILS_CSV"
-        ELS_OLD_DETAILS="${ELS_ALGO_ROOT}/UNG-nTfalse/$(basename "$RESULT_OUTPUT_DIR")/results/query_details_repeat${NUM_REPEATS}.csv"
-    fi
-    ELS_AVG_FILE="${SHARED_OUTPUT_DIR}/Results/ELS_complexity_average.csv"
-    if [[ -f "$ELS_OLD_DETAILS" && -f "$ELS_NEW_DETAILS" ]]; then
-        ELS_AGGREGATOR="${SCRIPT_DIR}/tools/aggregate_els_complexity.py"
-        python3 "$ELS_AGGREGATOR" \
-            --task "$QUERY_DIR_NAME" \
-            --run-id "$(basename "$RESULT_OUTPUT_DIR")" \
-            --old "$ELS_OLD_DETAILS" --new "$ELS_NEW_DETAILS" \
-            --output "$ELS_AVG_FILE"
-        echo "ELS complexity averages updated: $ELS_AVG_FILE"
-    else
-        echo "ELS complexity aggregation pending counterpart result: old=[$ELS_OLD_DETAILS], new=[$ELS_NEW_DETAILS]"
-    fi
-fi
 
 echo "All search and post-processing tasks have completed successfully."
