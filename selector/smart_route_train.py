@@ -54,8 +54,8 @@ USE_SMOTE = False
 
 # Retry once with looser labeling thresholds when pairwise training collapses
 # into a single class. This does not affect normally trainable cases.
-SINGLE_LABEL_RETRY_MIN_RECALL = 0.85
-SINGLE_LABEL_RETRY_MARGIN_THRESHOLD = 0.5
+SINGLE_LABEL_RETRY_MIN_RECALL = 0.9
+SINGLE_LABEL_RETRY_MARGIN_THRESHOLD = 0
 
 ROUTE_STRATEGY = {
     "default": "auto"
@@ -63,8 +63,8 @@ ROUTE_STRATEGY = {
 
 # Training mode configuration
 RUN_SINGLE_DATASET_TRAINING = False
-RUN_MULTI_DATASET_GENERALIZATION = False # Train on 80% of the target dataset plus the other 7 datasets, then test on the remaining 20% of the target dataset
-RUN_CROSS_DATASET_HOLDOUT = True # Train on the other 7 datasets only, then evaluate on the target dataset as a pure holdout
+RUN_MULTI_DATASET_GENERALIZATION = True # Train on 80% of the target dataset plus the other 7 datasets, then test on the remaining 20% of the target dataset
+RUN_CROSS_DATASET_HOLDOUT = False # Train on the other 7 datasets only, then evaluate on the target dataset as a pure holdout
 TARGET_DATASET_TRAIN_RATIO = 0.8
 GENERALIZATION_HOLDOUT_TARGET_DATASETS = DATASET_LIST.copy()
 
