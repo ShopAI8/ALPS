@@ -42,10 +42,10 @@ MIN_RECALL_THRESHOLD = 0.90
 DATASET_MIN_RECALL_THRESHOLDS = {
     "Laion": 0.91,
 }
-MARGIN_THRESHOLD = 0.2 
+MARGIN_THRESHOLD = 0 
 DATASET_MARGIN_THRESHOLDS = {
-    "Tiktok": 1.5,
-    "Reviews": 1.0,
+    "Tiktok": 0,
+    "Reviews": 0,
 }
 USE_SMOTE = False
 
