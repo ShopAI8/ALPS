@@ -30,16 +30,16 @@ conda env create -f environment.yml
 
 ### 1.2 Data Preparation
 
-Download the required datasets from [Hugging Face](https://huggingface.co/datasets/Paper4Review/SmartRoute_data) into the `data` folder in advance.
+Download the example **Genome** dataset from [Hugging Face](https://huggingface.co/datasets/Paper4Review/SmartRoute_data) into the `data/Genome` directory in advance.
 
-Please note that `data` is the default directory for storing datasets. The dataset collection includes eight datasets: Amazon, BookReviews, Genome, Laion, Music, Reviews, Tiktok, and VariousImg. Please store each dataset under the `data` directory using the same directory structure.
+Please note that `data` is the default directory for storing datasets. Keep the downloaded Genome files under `data/Genome` using the original directory structure from Hugging Face.
 
-Each dataset contains the following files:
+The Genome dataset contains the following files:
 
-1. `*_random_300/`: This folder contains the query files used for testing. The wildcard `*` represents the dataset name.
-2. `*_base_labels.txt`: This file contains the ground-truth labels corresponding to the base vectors.
-3. `*_base.bin`: This binary file contains the base vectors of the dataset.
-4. `*_base.fvecs`: This file stores the base vectors in `fvecs` format.
+1. `*_random_300/`: These directories contain the query files used for testing.
+2. `Genome_base_labels.txt`: This file contains the labels corresponding to the base vectors.
+3. `Genome_base.bin`: This binary file contains the base vectors.
+4. `Genome_base.fvecs`: This file stores the base vectors in `fvecs` format.
 
 ### 1.3 Repository Structure
 
