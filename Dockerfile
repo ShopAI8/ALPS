@@ -47,7 +47,7 @@ COPY requirements-docker.txt /tmp/requirements-docker.txt
 RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
     && python -m pip install --no-cache-dir "cmake>=3.24,<5" -r /tmp/requirements-docker.txt
 
-WORKDIR /workspace/ALPS20260922
+WORKDIR /workspace/ALPS
 COPY . .
 RUN chmod +x build_hybrid.sh exp.sh generate_gt.sh search.sh generate_queries.sh
 
@@ -75,8 +75,8 @@ RUN if [[ "${ENABLE_KNOWHERE}" == "1" ]]; then \
 RUN mkdir -p /opt/alps-build /tmp/alps-empty-data /tmp/alps-build-output \
     && if [[ "${PREBUILD}" == "1" ]]; then \
          if [[ "${ENABLE_KNOWHERE}" == "1" ]]; then \
-           export KNOWHERE_INCLUDE_DIR=/workspace/ALPS20260922/knowhere/include; \
-           export KNOWHERE_LIBRARY=/workspace/ALPS20260922/knowhere/build/Release/libknowhere.so; \
+           export KNOWHERE_INCLUDE_DIR=/workspace/ALPS/knowhere/include; \
+           export KNOWHERE_LIBRARY=/workspace/ALPS/knowhere/build/Release/libknowhere.so; \
          else \
            export KNOWHERE_INCLUDE_DIR=/nonexistent/knowhere/include; \
            export KNOWHERE_LIBRARY=/nonexistent/libknowhere.so; \
@@ -109,7 +109,7 @@ ENV ALPS_BUILD_ROOT=/opt/alps-build \
     ALPS_OUTPUT_ROOT=/results \
     ALPS_RESULTS_DIR=/results \
     ALPS_ENABLE_PERF=auto \
-    LD_LIBRARY_PATH=/workspace/ALPS20260922/UNG/codes/third_party/onnxruntime-linux-x64-1.16.3/lib:/workspace/ALPS20260922/knowhere/build/Release
+    LD_LIBRARY_PATH=/workspace/ALPS/UNG/codes/third_party/onnxruntime-linux-x64-1.16.3/lib:/workspace/ALPS/knowhere/build/Release
 
 VOLUME ["/data", "/results"]
 CMD ["bash"]

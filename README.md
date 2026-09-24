@@ -8,7 +8,7 @@ This repository provides **ALPS**, an enhanced implementation for **Filtered App
 
 ### 1.1 Environment Setup
 
-We conduct experiments on a Linux server with two Intel Xeon Gold 6342 processors, 144 threads, and 1 TB RAM. All algorithms are implemented in C++ and python. The project is built with CMake 4.3.2 and Boost 1.85.0.
+We conduct experiments on a Linux server with two Intel Xeon Platinum 8360Y processors, 144 threads, and 1 TB RAM. All algorithms are implemented in C++ and python. The project is built with CMake 4.3.2 and Boost 1.85.0.
 
 The experimental environment is as follows:
 

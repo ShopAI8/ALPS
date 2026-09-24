@@ -63,7 +63,7 @@ ROUTE_STRATEGY = {
 
 # Training mode configuration
 RUN_SINGLE_DATASET_TRAINING = False
-RUN_MULTI_DATASET_GENERALIZATION = True # Train on 80% of the target dataset plus the other 7 datasets, then test on the remaining 20% of the target dataset
+RUN_MULTI_DATASET_GENERALIZATION = True # Split every dataset 80/20, train one shared model on all 80% splits, then test it on every 20% split
 RUN_CROSS_DATASET_HOLDOUT = False # Train on the other 7 datasets only, then evaluate on the target dataset as a pure holdout
 TARGET_DATASET_TRAIN_RATIO = 0.8
 GENERALIZATION_HOLDOUT_TARGET_DATASETS = DATASET_LIST.copy()
@@ -389,6 +389,49 @@ def train_and_evaluate_model(X_train, y_train, X_test, y_test, target_map, model
         "classifier": classifier,
         "real_classes": real_classes,
         "test_size": len(X_test_np)
+    }
+
+def evaluate_trained_model(X_test, y_test, target_map, classifier, real_classes):
+    """Evaluate one already-fitted shared router without retraining it."""
+    y_test_mapped = y_test.map(target_map)
+    test_mask = y_test_mapped.notna()
+    X_test_clean = X_test[test_mask].copy()
+    y_test_clean = y_test_mapped[test_mask].astype(int)
+
+    if X_test_clean.empty:
+        raise ValueError("测试集没有可评估的有效样本。")
+
+    t_pred_start = time.perf_counter()
+    y_pred_np = classifier.predict(X_test_clean.values)
+    pred_latency_us = ((time.perf_counter() - t_pred_start) * 1e6) / len(X_test_clean)
+
+    y_pred_abs = np.array([real_classes[int(idx)] for idx in y_pred_np])
+    y_test_abs = y_test_clean.values
+    acc = accuracy_score(y_test_abs, y_pred_abs)
+
+    inv_map = {v: k for k, v in target_map.items()}
+    present_labels = sorted(np.unique(np.concatenate((y_test_abs, y_pred_abs))))
+    target_names = [inv_map[label] for label in present_labels]
+    cls_report = classification_report(
+        y_test_abs,
+        y_pred_abs,
+        labels=present_labels,
+        target_names=target_names,
+        zero_division=0
+    )
+    cm = confusion_matrix(y_test_abs, y_pred_abs, labels=present_labels)
+    cm_df = pd.DataFrame(
+        cm,
+        index=[f"True_{name}" for name in target_names],
+        columns=[f"Pred_{name}" for name in target_names]
+    )
+
+    return {
+        "acc": acc,
+        "pred_latency_us": pred_latency_us,
+        "cls_report": cls_report,
+        "cm_df": cm_df,
+        "test_size": len(X_test_clean)
     }
 
 def run_layer_ablation(X_train, y_train, X_test, y_test, target_map, best_model_type):
@@ -798,227 +841,10 @@ def select_common_algorithms(train_dataset_names, holdout_dataset_name, config_n
         ordered_reference = sorted(common_algos)
     return [algo for algo in ordered_reference if algo in common_algos]
 
-def train_multi_dataset_generalization_for_candidates(
-    target_dataset_name,
-    aux_dataset_names,
-    config_name,
-    algo_list,
-    output_dir,
-    report_path,
-    route_scope_name
-):
-    if len(aux_dataset_names) == 0:
-        print(f"❌ {route_scope_name} 没有可用的辅助训练数据集。")
-        return [], [], []
-
-    target_map = {algo: idx for idx, algo in enumerate(algo_list)}
-    train_feature_frames = []
-    train_target_frames = []
-    train_dataset_stats = []
-
-    df_target = load_dataset_dataframe(target_dataset_name, config_name)
-    if df_target is None:
-        return [], [], []
-
-    prepared_target = prepare_routing_training_data(
-        df_target,
-        target_dataset_name,
-        algo_list,
-        f"{route_scope_name} | Target: {target_dataset_name}"
-    )
-    if prepared_target is None:
-        return [], [], []
-
-    target_valid_indices = prepared_target["valid_indices"]
-    target_y_valid = prepared_target["work_df"].loc[target_valid_indices, "Target"]
-    target_stratify = target_y_valid if target_y_valid.value_counts().min() >= 2 else None
-    target_train_idx, target_test_idx = train_test_split(
-        target_valid_indices,
-        train_size=TARGET_DATASET_TRAIN_RATIO,
-        random_state=42,
-        stratify=target_stratify
-    )
-
-    train_feature_frames.append(prepared_target["X"].loc[target_train_idx].copy())
-    train_target_frames.append(prepared_target["work_df"].loc[target_train_idx, "Target"].copy())
-    train_dataset_stats.append({
-        "Dataset": f"{target_dataset_name} (target train {TARGET_DATASET_TRAIN_RATIO:.0%})",
-        "Valid_Samples": len(target_train_idx),
-        "Unknown_Count": prepared_target["unknown_count"],
-        "Unknown_Rate": prepared_target["unknown_rate"],
-        "Total_Samples": prepared_target["total_count"]
-    })
-
-    for source_dataset in aux_dataset_names:
-        df_source = load_dataset_dataframe(source_dataset, config_name)
-        if df_source is None:
-            continue
-
-        prepared_source = prepare_routing_training_data(
-            df_source,
-            source_dataset,
-            algo_list,
-            f"{route_scope_name} | Train Source: {source_dataset}"
-        )
-        if prepared_source is None:
-            continue
-
-        source_indices = prepared_source["valid_indices"]
-        train_feature_frames.append(prepared_source["X"].loc[source_indices].copy())
-        train_target_frames.append(prepared_source["work_df"].loc[source_indices, "Target"].copy())
-        train_dataset_stats.append({
-            "Dataset": source_dataset,
-            "Valid_Samples": len(source_indices),
-            "Unknown_Count": prepared_source["unknown_count"],
-            "Unknown_Rate": prepared_source["unknown_rate"],
-            "Total_Samples": prepared_source["total_count"]
-        })
-
-    if not train_feature_frames:
-        print(f"❌ {route_scope_name} 没有可用的跨数据集训练样本。")
-        return [], [], []
-
-    X_train = pd.concat(train_feature_frames, axis=0, ignore_index=True)
-    y_train = pd.concat(train_target_frames, axis=0, ignore_index=True)
-
-    X_test = prepared_target["X"].loc[target_test_idx].copy()
-    y_test = prepared_target["work_df"].loc[target_test_idx, "Target"].copy()
-    y_global_best_test = prepared_target["work_df"].loc[target_test_idx, "Global_Best"]
-
-    if y_train.nunique() < 2:
-        print(f"❌ {route_scope_name} 聚合后的训练标签仍然只有一个类别，无法训练。")
-        return [], [], []
-
-    print(f"\n[{route_scope_name} - 多数据集泛化训练启动 | Train: {target_dataset_name}(80%) + {aux_dataset_names} -> Test: {target_dataset_name}(20%)]")
-
-    selection_cache = {}
-    selection_metrics = []
-
-    for model_type in MODELS_TO_TRY:
-        try:
-            final_res = train_and_evaluate_model(
-                X_train,
-                y_train,
-                X_test,
-                y_test,
-                target_map,
-                model_type,
-                use_smote=USE_SMOTE
-            )
-            selection_cache[model_type] = final_res
-            selection_metrics.append({
-                "Mode": "MultiDatasetGeneralization",
-                "Model": model_type,
-                "Accuracy": final_res["acc"],
-                "Train_Time_ms": final_res["train_time_ms"],
-                "Pred_Latency_us": final_res["pred_latency_us"],
-                "Test_Size": final_res["test_size"]
-            })
-            print(f"  > {model_type:<15} | 目标域准确率: {final_res['acc']:.4%}")
-        except ImportError:
-            print(f"  > ⚠️ 缺少 {model_type} 引擎依赖库。")
-        except Exception as e:
-            print(f"  > ⚠️ {model_type} 训练失败: {e}")
-
-    if not selection_metrics:
-        print(f"❌ {route_scope_name} 没有成功训练出的模型，跳过。")
-        return [], [], []
-
-    best_model = max(selection_metrics, key=lambda x: x["Accuracy"])["Model"]
-    strategy_desc = "Target-Domain Test Accuracy"
-
-    res = selection_cache[best_model]
-    candidate_set_name = " vs ".join(algo_list)
-    system_acc = calculate_system_accuracy(X_test, y_global_best_test, res['classifier'], res['real_classes'], target_map)
-
-    os.makedirs(output_dir, exist_ok=True)
-    save_onnx_model(res['classifier'], best_model, X_train.shape[1], output_dir, "router.onnx", res['real_classes'])
-    save_class_labels(output_dir, algo_list)
-
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write("┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n")
-        f.write("┃        Multi-Dataset Routing Generalization Assessment Report     ┃\n")
-        f.write("┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n")
-        f.write(f"┃ 目标集  : {target_dataset_name:<15} 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S'):<20} ┃\n")
-        f.write(f"┃ 配置    : {config_name:<52} ┃\n")
-        f.write(f"┃ 候选集  : {candidate_set_name:<52} ┃\n")
-        f.write(f"┃ 训练源  : {', '.join([target_dataset_name + '(80%)'] + aux_dataset_names):<52} ┃\n")
-        f.write(f"┃ 选用策略: {strategy_desc:<52} ┃\n")
-        f.write("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n")
-
-        f.write("【零 | 训练源统计 (Train Source Summary)】\n")
-        f.write("-" * 80 + "\n")
-        for stat in train_dataset_stats:
-            f.write(
-                f"  ▶ {stat['Dataset']}: valid={stat['Valid_Samples']}, "
-                f"unknown={stat['Unknown_Count']}/{stat['Total_Samples']} ({stat['Unknown_Rate']:.4%})\n"
-            )
-        f.write(f"  ▶ 聚合训练样本数: {len(X_train)}\n")
-        f.write(f"  ▶ 目标数据集测试样本数(20%): {len(X_test)}\n\n")
-
-        f.write("【壹 | 泛化结果 (Generalization Evaluation)】\n")
-        f.write("-" * 80 + "\n")
-        f.write(f"  ▶ 选定引擎 : {best_model}\n")
-        f.write(f"  ▶ 候选算法 : {', '.join(algo_list)}\n")
-        f.write(f"  ▶ 目标集 Unknown 样本数 : {prepared_target['unknown_count']} / {prepared_target['total_count']} ({prepared_target['unknown_rate']:.4%})\n")
-        f.write(f"  🚀 目标集 20% 分类准确率: {res['acc']:.4%}\n")
-        f.write(f"  🚀 目标集 20% 端到端分发准确率: {system_acc:.4%}\n\n")
-
-        f.write("【贰 | 胜出模型透视 (Selected Model Deep Dive)】\n")
-        f.write("-" * 80 + "\n")
-        f.write(f"[胜出者: {best_model}]\n")
-        f.write("  ▶ 详细分类报告:\n  " + res['cls_report'].replace('\n', '\n  ') + "\n")
-        f.write("  ▶ 混淆矩阵:\n  " + res['cm_df'].to_string().replace('\n', '\n  ') + "\n\n")
-        f.write("  ▶ 特征重要性:\n  " + res['importance_str'].replace('\n', '\n  ') + "\n\n")
-
-    dataset_metrics = []
-    for m in selection_metrics:
-        m_copy = m.copy()
-        m_copy.update({
-            "Mode": "MultiDatasetGeneralization",
-            "Dataset": target_dataset_name,
-            "Train_Datasets": ",".join([f"{target_dataset_name}(80%)"] + aux_dataset_names),
-            "Config": config_name,
-            "Layer": route_scope_name,
-            "Candidate_Set": candidate_set_name,
-            "Unknown_Count": prepared_target["unknown_count"],
-            "Unknown_Rate": prepared_target["unknown_rate"],
-            "Total_Samples": prepared_target["total_count"]
-        })
-        dataset_metrics.append(m_copy)
-
-    dataset_metrics.append({
-        "Mode": "MultiDatasetGeneralization",
-        "Dataset": target_dataset_name,
-        "Train_Datasets": ",".join([f"{target_dataset_name}(80%)"] + aux_dataset_names),
-        "Config": config_name,
-        "Layer": f"{route_scope_name}_System_End_to_End",
-        "Model": f"MultiDataset({best_model})",
-        "Accuracy": system_acc,
-        "Train_Time_ms": np.nan,
-        "Pred_Latency_us": np.nan,
-        "Test_Size": len(y_global_best_test[y_global_best_test != 'Unknown']),
-        "Candidate_Set": candidate_set_name,
-        "Unknown_Count": prepared_target["unknown_count"],
-        "Unknown_Rate": prepared_target["unknown_rate"],
-        "Total_Samples": prepared_target["total_count"]
-    })
-
-    dataset_importances = []
-    if res['importances_dict']:
-        imp = res['importances_dict'].copy()
-        imp.update({
-            "Mode": "MultiDatasetGeneralization",
-            "Dataset": target_dataset_name,
-            "Train_Datasets": ",".join([f"{target_dataset_name}(80%)"] + aux_dataset_names),
-            "Config": config_name,
-            "Layer": route_scope_name,
-            "Model": best_model,
-            "Candidate_Set": candidate_set_name
-        })
-        dataset_importances.append(imp)
-
-    return dataset_metrics, [], dataset_importances
+def select_common_algorithms_for_datasets(dataset_names, config_name):
+    if not dataset_names:
+        return []
+    return select_common_algorithms(dataset_names[:-1], dataset_names[-1], config_name)
 
 def train_cross_dataset_holdout_for_candidates(
     target_dataset_name,
@@ -1222,57 +1048,327 @@ def train_cross_dataset_holdout_for_candidates(
 
     return dataset_metrics, [], dataset_importances
 
-def process_multi_dataset_generalization(
-    target_dataset_name,
+def train_shared_multi_dataset_generalization_for_candidates(
+    dataset_names,
     config_name,
+    algo_list,
+    output_dir,
+    report_path,
+    route_scope_name
+):
+    """Train one router on every dataset's 80% split and test it on each 20% split."""
+    if not dataset_names:
+        print(f"❌ {route_scope_name} 没有可用的数据集。")
+        return [], [], []
+
+    target_map = {algo: idx for idx, algo in enumerate(algo_list)}
+    train_feature_frames = []
+    train_target_frames = []
+    dataset_stats = []
+    test_splits = {}
+
+    for dataset_name in dataset_names:
+        df = load_dataset_dataframe(dataset_name, config_name)
+        if df is None:
+            return [], [], []
+
+        prepared = prepare_routing_training_data(
+            df,
+            dataset_name,
+            algo_list,
+            f"{route_scope_name} | Split: {dataset_name}"
+        )
+        if prepared is None:
+            return [], [], []
+
+        valid_indices = prepared["valid_indices"]
+        y_valid = prepared["work_df"].loc[valid_indices, "Target"]
+        stratify_labels = y_valid if y_valid.value_counts().min() >= 2 else None
+        try:
+            train_idx, test_idx = train_test_split(
+                valid_indices,
+                train_size=TARGET_DATASET_TRAIN_RATIO,
+                random_state=42,
+                stratify=stratify_labels
+            )
+        except ValueError as exc:
+            if stratify_labels is None:
+                raise
+            print(f"⚠️ {dataset_name} 无法分层切分（{exc}），改用固定随机非分层切分。")
+            train_idx, test_idx = train_test_split(
+                valid_indices,
+                train_size=TARGET_DATASET_TRAIN_RATIO,
+                random_state=42,
+                stratify=None
+            )
+
+        train_feature_frames.append(prepared["X"].loc[train_idx].copy())
+        train_target_frames.append(prepared["work_df"].loc[train_idx, "Target"].copy())
+        test_splits[dataset_name] = {
+            "X": prepared["X"].loc[test_idx].copy(),
+            "y": prepared["work_df"].loc[test_idx, "Target"].copy(),
+            "y_global_best": prepared["work_df"].loc[test_idx, "Global_Best"].copy(),
+            "unknown_count": prepared["unknown_count"],
+            "unknown_rate": prepared["unknown_rate"],
+            "total_count": prepared["total_count"]
+        }
+        dataset_stats.append({
+            "Dataset": dataset_name,
+            "Train_Samples": len(train_idx),
+            "Test_Samples": len(test_idx),
+            "Unknown_Count": prepared["unknown_count"],
+            "Unknown_Rate": prepared["unknown_rate"],
+            "Total_Samples": prepared["total_count"]
+        })
+
+    X_train = pd.concat(train_feature_frames, axis=0, ignore_index=True)
+    y_train = pd.concat(train_target_frames, axis=0, ignore_index=True)
+    X_test_all = pd.concat(
+        [test_splits[name]["X"] for name in dataset_names],
+        axis=0,
+        ignore_index=True
+    )
+    y_test_all = pd.concat(
+        [test_splits[name]["y"] for name in dataset_names],
+        axis=0,
+        ignore_index=True
+    )
+
+    if y_train.nunique() < 2:
+        print(f"❌ {route_scope_name} 聚合后的训练标签只有一个类别，无法训练。")
+        return [], [], []
+
+    print(
+        f"\n[{route_scope_name} | 每个数据集使用 {TARGET_DATASET_TRAIN_RATIO:.0%} 训练，"
+        f"{1 - TARGET_DATASET_TRAIN_RATIO:.0%} 测试 | 全局模型只训练一次]"
+    )
+
+    selection_cache = {}
+    selection_metrics = []
+    for model_type in MODELS_TO_TRY:
+        try:
+            result = train_and_evaluate_model(
+                X_train,
+                y_train,
+                X_test_all,
+                y_test_all,
+                target_map,
+                model_type,
+                use_smote=USE_SMOTE
+            )
+            selection_cache[model_type] = result
+            selection_metrics.append({
+                "Model": model_type,
+                "Accuracy": result["acc"],
+                "Train_Time_ms": result["train_time_ms"],
+                "Pred_Latency_us": result["pred_latency_us"],
+                "Test_Size": result["test_size"]
+            })
+            print(f"  > {model_type:<15} | 合并测试集准确率: {result['acc']:.4%}")
+        except ImportError:
+            print(f"  > ⚠️ 缺少 {model_type} 引擎依赖库。")
+        except Exception as exc:
+            print(f"  > ⚠️ {model_type} 训练失败: {exc}")
+
+    if not selection_metrics:
+        print(f"❌ {route_scope_name} 没有成功训练出的模型，跳过。")
+        return [], [], []
+
+    best_model = max(selection_metrics, key=lambda item: item["Accuracy"])["Model"]
+    result = selection_cache[best_model]
+    candidate_set_name = " vs ".join(algo_list)
+    dataset_evaluations = {}
+
+    for dataset_name in dataset_names:
+        split = test_splits[dataset_name]
+        evaluation = evaluate_trained_model(
+            split["X"],
+            split["y"],
+            target_map,
+            result["classifier"],
+            result["real_classes"]
+        )
+        evaluation["system_acc"] = calculate_system_accuracy(
+            split["X"],
+            split["y_global_best"],
+            result["classifier"],
+            result["real_classes"],
+            target_map
+        )
+        dataset_evaluations[dataset_name] = evaluation
+        print(
+            f"  > {dataset_name:<15} | 20% 准确率: {evaluation['acc']:.4%} | "
+            f"测试样本: {evaluation['test_size']}"
+        )
+
+    os.makedirs(output_dir, exist_ok=True)
+    save_onnx_model(
+        result["classifier"],
+        best_model,
+        X_train.shape[1],
+        output_dir,
+        "router.onnx",
+        result["real_classes"]
+    )
+    save_class_labels(output_dir, algo_list)
+
+    macro_accuracy = np.mean([item["acc"] for item in dataset_evaluations.values()])
+    with open(report_path, "w", encoding="utf-8") as report:
+        report.write("Shared Multi-Dataset Routing Assessment Report\n")
+        report.write("=" * 80 + "\n")
+        report.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        report.write(f"配置: {config_name}\n")
+        report.write(f"数据集: {', '.join(dataset_names)}\n")
+        report.write(f"候选算法: {candidate_set_name}\n")
+        report.write(f"选定模型: {best_model}\n")
+        report.write("切分方式: 每个数据集独立分层 80%/20%\n\n")
+
+        report.write("【训练与测试样本】\n")
+        report.write("-" * 80 + "\n")
+        for stat in dataset_stats:
+            report.write(
+                f"{stat['Dataset']}: train={stat['Train_Samples']}, "
+                f"test={stat['Test_Samples']}, unknown={stat['Unknown_Count']}/"
+                f"{stat['Total_Samples']} ({stat['Unknown_Rate']:.4%})\n"
+            )
+        report.write(f"聚合训练样本数: {len(X_train)}\n")
+        report.write(f"聚合测试样本数: {len(X_test_all)}\n")
+        report.write(f"全局模型训练耗时: {result['train_time_ms']:.2f} ms\n")
+        report.write(f"合并测试集准确率: {result['acc']:.4%}\n")
+        report.write(f"各数据集宏平均准确率: {macro_accuracy:.4%}\n\n")
+
+        report.write("【各数据集 20% 测试结果】\n")
+        report.write("-" * 80 + "\n")
+        for dataset_name in dataset_names:
+            split = test_splits[dataset_name]
+            evaluation = dataset_evaluations[dataset_name]
+            report.write(f"[{dataset_name}]\n")
+            report.write(f"Test size: {evaluation['test_size']}\n")
+            report.write(f"Accuracy: {evaluation['acc']:.4%}\n")
+            report.write(f"System end-to-end accuracy: {evaluation['system_acc']:.4%}\n")
+            report.write(
+                f"Unknown: {split['unknown_count']}/{split['total_count']} "
+                f"({split['unknown_rate']:.4%})\n"
+            )
+            report.write("Classification report:\n" + evaluation["cls_report"] + "\n")
+            report.write("Confusion matrix:\n" + evaluation["cm_df"].to_string() + "\n\n")
+
+        report.write("【全局模型特征重要性】\n")
+        report.write("-" * 80 + "\n")
+        report.write(result["importance_str"] + "\n")
+
+    train_datasets_desc = ",".join([f"{name}(80%)" for name in dataset_names])
+    dataset_metrics = []
+    for dataset_name in dataset_names:
+        split = test_splits[dataset_name]
+        evaluation = dataset_evaluations[dataset_name]
+        common_fields = {
+            "Mode": "SharedMultiDatasetGeneralization",
+            "Dataset": dataset_name,
+            "Train_Datasets": train_datasets_desc,
+            "Config": config_name,
+            "Candidate_Set": candidate_set_name,
+            "Unknown_Count": split["unknown_count"],
+            "Unknown_Rate": split["unknown_rate"],
+            "Total_Samples": split["total_count"]
+        }
+        dataset_metrics.append({
+            **common_fields,
+            "Layer": route_scope_name,
+            "Model": best_model,
+            "Accuracy": evaluation["acc"],
+            "Train_Time_ms": result["train_time_ms"],
+            "Pred_Latency_us": evaluation["pred_latency_us"],
+            "Test_Size": evaluation["test_size"]
+        })
+        dataset_metrics.append({
+            **common_fields,
+            "Layer": f"{route_scope_name}_System_End_to_End",
+            "Model": f"SharedMultiDataset({best_model})",
+            "Accuracy": evaluation["system_acc"],
+            "Train_Time_ms": np.nan,
+            "Pred_Latency_us": np.nan,
+            "Test_Size": evaluation["test_size"]
+        })
+
+    dataset_importances = []
+    if result["importances_dict"]:
+        importance = result["importances_dict"].copy()
+        importance.update({
+            "Mode": "SharedMultiDatasetGeneralization",
+            "Dataset": "AllDatasets",
+            "Train_Datasets": train_datasets_desc,
+            "Config": config_name,
+            "Layer": route_scope_name,
+            "Model": best_model,
+            "Candidate_Set": candidate_set_name
+        })
+        dataset_importances.append(importance)
+
+    print(f"\n✅ 全局路由模型训练与八数据集评估完成: {report_path}")
+    return dataset_metrics, [], dataset_importances
+
+def process_multi_dataset_generalization(
+    config_name,
+    dataset_names=None,
     train_full_model=True,
     train_pairwise_models=True
 ):
+    dataset_names = list(dataset_names or DATASET_LIST)
     print(f"\n{'='*70}")
-    print(f"🌍 开始 8 数据集泛化评估: Train({target_dataset_name} 80% + 其他数据集) -> Test({target_dataset_name} 20%) | 配置: {config_name}")
+    print(
+        f"🌍 开始共享全局路由训练: Train(每个数据集 80%) -> "
+        f"Test(每个数据集 20%) | 配置: {config_name}"
+    )
     print(f"{'='*70}")
 
-    aux_dataset_names = [name for name in DATASET_LIST if name != target_dataset_name]
-    if not aux_dataset_names:
-        print(f"❌ 无法进行 target={target_dataset_name} 的多数据集训练：没有剩余辅助数据集。")
+    if not dataset_names:
+        print("❌ 没有配置可用数据集。")
         return [], [], []
 
-    output_dir = os.path.join(build_dataset_output_dir(target_dataset_name, config_name), "generalization_8datasets")
+    output_dir = os.path.join(
+        SELECT_MODELS_ROOT_DIR,
+        "global",
+        SELECT_MODELS_RUN_DIR,
+        config_name,
+        "generalization_8datasets"
+    )
     os.makedirs(output_dir, exist_ok=True)
 
     all_metrics = []
     all_importances = []
 
-    full_algo_list = select_common_algorithms(aux_dataset_names, target_dataset_name, config_name)
+    full_algo_list = select_common_algorithms_for_datasets(dataset_names, config_name)
     if full_algo_list is None:
         return [], [], []
 
     if train_full_model and len(full_algo_list) >= 2:
-        full_report_path = os.path.join(output_dir, f"SmartRoute_8Datasets_Report_{target_dataset_name}.txt")
-        full_metrics, _, full_importances = train_multi_dataset_generalization_for_candidates(
-            target_dataset_name=target_dataset_name,
-            aux_dataset_names=aux_dataset_names,
+        full_report_path = os.path.join(output_dir, "SmartRoute_8Datasets_Global_Report.txt")
+        full_metrics, _, full_importances = train_shared_multi_dataset_generalization_for_candidates(
+            dataset_names=dataset_names,
             config_name=config_name,
             algo_list=full_algo_list,
             output_dir=output_dir,
             report_path=full_report_path,
-            route_scope_name="MultiDataset Generalization (Full Candidate Set)"
+            route_scope_name="Shared MultiDataset Generalization (Full Candidate Set)"
         )
         all_metrics.extend(full_metrics)
         all_importances.extend(full_importances)
     elif train_full_model:
-        print(f"⚠️ {target_dataset_name} 与其余数据集没有共同的完整候选算法集合，跳过 full model。")
+        print("⚠️ 所有数据集之间没有至少两个共同候选算法，跳过 full model。")
 
     if train_pairwise_models and len(full_algo_list) >= 2:
         for pair_algos in combinations(full_algo_list, 2):
             pair_list = list(pair_algos)
             pair_name = build_candidate_set_name(pair_list)
             pair_output_dir = os.path.join(output_dir, "pairwise_models", pair_name)
-            pair_report_path = os.path.join(pair_output_dir, f"SmartRoute_8Datasets_Pair_Report_{target_dataset_name}_{pair_name}.txt")
-            pair_scope_name = f"MultiDataset Pairwise ({pair_list[0]} vs {pair_list[1]})"
-            pair_metrics, _, pair_importances = train_multi_dataset_generalization_for_candidates(
-                target_dataset_name=target_dataset_name,
-                aux_dataset_names=aux_dataset_names,
+            pair_report_path = os.path.join(
+                pair_output_dir,
+                f"SmartRoute_8Datasets_Global_Pair_Report_{pair_name}.txt"
+            )
+            pair_scope_name = f"Shared MultiDataset Pairwise ({pair_list[0]} vs {pair_list[1]})"
+            pair_metrics, _, pair_importances = train_shared_multi_dataset_generalization_for_candidates(
+                dataset_names=dataset_names,
                 config_name=config_name,
                 algo_list=pair_list,
                 output_dir=pair_output_dir,
@@ -1437,7 +1533,7 @@ def main():
     if RUN_SINGLE_DATASET_TRAINING:
         print("📦 已启用单数据集训练模式")
     if RUN_MULTI_DATASET_GENERALIZATION:
-        print(f"🌍 已启用 8 数据集泛化训练，目标数据集: {', '.join(GENERALIZATION_TARGET_DATASETS)}")
+        print(f"🌍 已启用 8 数据集共享全局路由训练: {', '.join(GENERALIZATION_TARGET_DATASETS)}")
     if RUN_CROSS_DATASET_HOLDOUT:
         print(f"🧪 已启用 7 训 1 测模式，目标数据集: {', '.join(GENERALIZATION_HOLDOUT_TARGET_DATASETS)}")
 
@@ -1468,18 +1564,17 @@ def main():
                     standard_importances.extend(d_importances)
 
         if RUN_MULTI_DATASET_GENERALIZATION:
-            for target_dataset in GENERALIZATION_TARGET_DATASETS:
-                res = process_multi_dataset_generalization(
-                    target_dataset,
-                    config_name,
-                    train_full_model=not pairwise_only,
-                    train_pairwise_models=train_pairwise_models
-                )
-                if res:
-                    d_metrics, d_ablation, d_importances = res
-                    standard_metrics.extend(d_metrics)
-                    standard_ablation.extend(d_ablation)
-                    standard_importances.extend(d_importances)
+            res = process_multi_dataset_generalization(
+                config_name,
+                dataset_names=GENERALIZATION_TARGET_DATASETS,
+                train_full_model=not pairwise_only,
+                train_pairwise_models=train_pairwise_models
+            )
+            if res:
+                d_metrics, d_ablation, d_importances = res
+                standard_metrics.extend(d_metrics)
+                standard_ablation.extend(d_ablation)
+                standard_importances.extend(d_importances)
 
         if RUN_CROSS_DATASET_HOLDOUT:
             for target_dataset in GENERALIZATION_HOLDOUT_TARGET_DATASETS:

@@ -200,7 +200,8 @@ namespace ANNS
          // SODA's "NaviX" family is expected to route into the
          // NaviX-ACORN baseline, which runs on the ACORN index.
          if (label == "NaviX" || label == "NaviX-ACORN") return 4;
-         if (label == "FAVOR" || label == "FAVOR-HNSW") return 12;
+         if (label == "FAVOR") return 11;
+         if (label == "FAVOR-HNSW") return 12;
          if (label == "UNG+") return 8;
          // The wide-table selector uses the label UNG++ for the sorted-LNG
          // implementation (baseline id 15).
