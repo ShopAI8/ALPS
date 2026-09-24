@@ -87,7 +87,7 @@ Run the following command to start an experiment:
 
 ---
 
-## 3. Docker Environment（推荐）
+## 3. Docker Environment
 
 The Docker image installs the Python and C++ dependencies and precompiles
 CRoaring, NaviX, UNG, ACORN, and FAVOR. Dataset files and experiment outputs
