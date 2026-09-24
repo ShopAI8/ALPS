@@ -43,7 +43,7 @@ MODELS_TO_TRY = ["XGBoost"]
 MIN_RECALL_THRESHOLD = 0.90
 # Per-dataset min-recall overrides. Fall back to MIN_RECALL_THRESHOLD when unset.
 DATASET_MIN_RECALL_THRESHOLDS = {
-    "Laion": 0.91,
+    "Laion": 0.90,
 }
 MARGIN_THRESHOLD = 0 
 DATASET_MARGIN_THRESHOLDS = {
