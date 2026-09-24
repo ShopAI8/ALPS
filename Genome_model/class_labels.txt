@@ -1,0 +1,3 @@
+0,FAVOR
+1,TFNG
+2,pre-filter

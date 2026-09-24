@@ -38,8 +38,8 @@ BASE_DIR = os.environ.get(
 )
 EDA_ROOT_DIR = os.path.join(BASE_DIR, "EDA_Plots_try")
 
-# MODELS_TO_TRY = ["RandomForest", "XGBoost", "LightGBM", "DecisionTree"]
-MODELS_TO_TRY = ["XGBoost"]
+MODELS_TO_TRY = ["RandomForest", "XGBoost", "LightGBM", "DecisionTree"]
+# MODELS_TO_TRY = ["XGBoost"]
 MIN_RECALL_THRESHOLD = 0.90
 # Per-dataset min-recall overrides. Fall back to MIN_RECALL_THRESHOLD when unset.
 DATASET_MIN_RECALL_THRESHOLDS = {
