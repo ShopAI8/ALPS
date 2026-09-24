@@ -12,7 +12,7 @@ We conduct experiments on a Linux server with two Intel Xeon Platinum 8360Y proc
 
 The experimental environment is as follows:
 
-- CPU: 2 × Intel Xeon Gold 6342 processors
+- CPU: 2 × Intel Xeon Platinum 8360Y processors
 - Threads: 144
 - Memory: 1 TB RAM
 - Compiler: GCC 11.4.0
@@ -76,7 +76,7 @@ You can modify the experimental parameters and dataset paths in the correspondin
 Run the following command to start an experiment:
 
 ```bash
-./exp.sh experiment_json/experiments-Genome-200-random-300-mix-len.json
+./exp.sh experiment_json/202604-200-random-300-mix-len/experiments-Genome-200-random-300-mix-len.json
 ```
 
 ### 2.2 Experiment Workflow
