@@ -1,9 +1,9 @@
 {
    "experiments": [
       {
-         "dataset_name": "VariousImg",
+         "dataset_name": "VImg",
          "shared_config": {
-            "data_dir": "/your_path/FilterVector/FilterVectorData/VariousImg",
+            "data_dir": "/your_path/FilterVector/FilterVectorData/VImg",
             "output_dir": "/your_path/FilterVector/FilterVectorResults/",
             "build_mode": "serial",
             "max_degree": 32,
@@ -41,9 +41,9 @@
          ]
       },
       {
-         "dataset_name": "VariousImg",
+         "dataset_name": "VImg",
          "shared_config": {
-            "data_dir": "/your_path/FilterVector/FilterVectorData/VariousImg",
+            "data_dir": "/your_path/FilterVector/FilterVectorData/VImg",
             "output_dir": "/your_path/FilterVector/FilterVectorResults/",
             "build_mode": "serial",
             "max_degree": 32,
