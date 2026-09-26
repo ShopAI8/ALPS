@@ -211,7 +211,8 @@ namespace ANNS
           uint32_t num_threads,
           std::vector<QueryStats>& out_global_stats);
 
-      // Global sorting: reorder queries for better cache locality.
+      // ALPS+ global sorting: group by routed algorithm, then order each group
+      // lexicographically by its normalized label sequence.
       std::vector<int> get_sorted_query_ids(
           std::shared_ptr<IStorage> query_storage,
           const std::vector<int>& algo_choices,
@@ -566,8 +567,9 @@ namespace ANNS
       // statistics
       float _index_time = 0, _label_processing_time = 0, _build_graph_time = 0, _build_vector_attr_graph_time = 0, _cal_descendants_time = 0, _cal_coverage_ratio_time = 0;
       float _build_LNG_time = 0, _build_cross_edges_time = 0;
-      double _build_roaring_bitsets_time;
+      double _build_roaring_bitsets_time = 0.0;
       float _index_size, _index_size_add_rb;
+      uint64_t _group_attr_roaring_serialized_size_bytes = 0;
       IdxType _graph_num_edges, _LNG_num_edges;
 
       // Fine-grained timing for `add_new_distance_oriented_edges`.

@@ -125,6 +125,14 @@ Run the following command to start an experiment:
 3. **Ground-Truth Generation**: `generate_gt.sh` is invoked to compute the true nearest neighbors, which are used for recall evaluation.
 4. **Search Execution**: `search.sh` is invoked to run the search process. It loads the pretrained ONNX router model for online scheduling.
 
+During UNG/TFNG construction, a trie is used only as temporary working data to
+derive label groups and the label navigation graph (LNG). It is not serialized
+into `index_files/` and is not loaded by TFNG, ALPS, or ALPS+ at query time.
+The label-to-group CRoaring inverted index is persisted separately as
+`index_files/group_attr_roaring_inv.bin` and loaded directly for search. Its
+serialized bytes are included in the reported index size. Older indexes that
+do not contain this file remain supported through an in-memory rebuild.
+
 ---
 
 
@@ -135,7 +143,7 @@ The following parameters in the configuration files or scripts determine the beh
 
 | Parameter | Description | Values / Notes |
 | :--- | :--- | :--- |
-| `ROUTING_MODE` | Determines the routing logic. | `0`: **TFNG**; `1`: **ALPS**; `5`: **ALPS+**. |
+| `ROUTING_MODE` | Determines the routing logic. | `0`: **TFNG**; `1`: **ALPS**; `5`: **ALPS+** (group by routed algorithm, then sort each group lexicographically by labels). |
 | `BASELINE_ALG` | Selects TFNG when `ROUTING_MODE=0`. | `15`: **TFNG**. |
 | `BUILD_MODE` | Specifies the index construction mode. | `serial`, `parallel`, `all`, `ung_only`, `favor_only`, `skip`, or `compile`. |
 | `Lsearch` | Search parameter for TFNG. | Similar to `efSearch` in HNSW; controls the search depth. |
@@ -149,3 +157,9 @@ The decision model for intelligent routing is trained using Python scripts:
 
 - **Training**: Use `selector/smart_route_train.py`.
 - **Deployment**: Export the trained model to `.onnx` format and place it in the `SelectModels` directory, where it can be loaded by the C++ `MethodSelector`.
+
+Routing labels are generated deterministically. Candidates must first reach
+recall 0.90; the candidate with the highest QPS after six-decimal rounding is
+selected. A QPS tie is resolved by higher recall, followed by the fixed order
+TFNG, FAVOR, and pre-filter. The historical CSV name `UNG++-sorted-lng` is
+treated as TFNG.

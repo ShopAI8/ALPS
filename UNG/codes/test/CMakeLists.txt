@@ -15,3 +15,6 @@ target_link_libraries(test_build_vamana PRIVATE -Wl,--whole-archive ${PROJECT_NA
 
 add_executable(test_search_vamana test_search_vamana.cpp)
 target_link_libraries(test_search_vamana PRIVATE -Wl,--whole-archive ${PROJECT_NAME} Vamana -Wl,--no-whole-archive Boost::program_options Boost::filesystem OpenMP::OpenMP_CXX ${ROARING_LIB} onnxruntime)
+
+add_executable(test_alps_query_sort test_alps_query_sort.cpp)
+target_link_libraries(test_alps_query_sort PRIVATE ${PROJECT_NAME} Vamana Boost::filesystem ${ROARING_LIB} onnxruntime OpenMP::OpenMP_CXX)

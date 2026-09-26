@@ -102,9 +102,14 @@ BUILD_THREADS="${NUM_THREADS:-60}"
 
 build_ung() {
     local marker="$INDEX_OUTPUT_DIR/index_files/.ung_built"
-    if [[ -f "$marker" && -f "$INDEX_OUTPUT_DIR/index_files/meta" ]]; then
+    local group_attr_roaring="$INDEX_OUTPUT_DIR/index_files/group_attr_roaring_inv.bin"
+    if [[ -f "$marker" && -f "$INDEX_OUTPUT_DIR/index_files/meta" && -s "$group_attr_roaring" ]]; then
         echo "[UNG] Existing index found; skipping."
         return
+    fi
+
+    if [[ -f "$marker" && -f "$INDEX_OUTPUT_DIR/index_files/meta" && ! -s "$group_attr_roaring" ]]; then
+        echo "[UNG] Existing legacy index lacks group_attr_roaring_inv.bin; rebuilding."
     fi
 
     "$UNG_EXECUTABLE" \
@@ -122,8 +127,8 @@ build_ung() {
         --rabitq_total_bits "${RABITQ_TOTAL_BITS:-4}" \
         >"$INDEX_OUTPUT_DIR/others/ung_build.log" 2>&1
 
-    if [[ ! -f "$INDEX_OUTPUT_DIR/index_files/meta" ]]; then
-        echo "[UNG] 构建失败，未生成 meta；日志: $INDEX_OUTPUT_DIR/others/ung_build.log"
+    if [[ ! -f "$INDEX_OUTPUT_DIR/index_files/meta" || ! -s "$group_attr_roaring" ]]; then
+        echo "[UNG] 构建失败，未生成完整索引（meta/group_attr_roaring_inv.bin）；日志: $INDEX_OUTPUT_DIR/others/ung_build.log"
         return 1
     fi
     touch "$marker"

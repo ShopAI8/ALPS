@@ -1033,7 +1033,7 @@ namespace ANNS
       _num_threads = num_threads;
       _scenario = scenario;
 
-      std::cout << "Dividing groups and building the trie tree index ..." << std::endl;
+      std::cout << "Dividing groups and building a transient trie for LNG construction ..." << std::endl;
       auto start_time = std::chrono::high_resolution_clock::now();
       build_trie_and_divide_groups();
       _graph = std::make_shared<ANNS::Graph>(base_storage->get_num_points());
@@ -1156,6 +1156,14 @@ namespace ANNS
       {
          _rabitq_build_time_ms = 0.0;
       }
+
+      // Persisted label -> group CRoaring index used by TFNG/ALPS/ALPS+.
+      // Include its construction in the bitmap preprocessing time.
+      auto group_attr_roaring_start_time = std::chrono::high_resolution_clock::now();
+      build_group_inverted_indices();
+      _build_roaring_bitsets_time += std::chrono::duration<double, std::milli>(
+                                           std::chrono::high_resolution_clock::now() - group_attr_roaring_start_time)
+                                           .count();
 
       // index time
       _index_time = std::chrono::duration<double, std::milli>(
@@ -4480,7 +4488,7 @@ void UniNavGraph::calculate_query_features_only(
 // =======================begin: 计算Fpass======================
    // fxy_add
    void UniNavGraph::build_group_inverted_indices() {
-      std::cout << "\n--- Building Group-level Inverted Indices for Fpass Benchmark ---" << std::endl;
+      std::cout << "\n--- Building label-to-group inverted indices ---" << std::endl;
       
       _group_attr_adj_list.clear();
       _group_attr_adj_list.resize(_num_attributes);
@@ -4499,7 +4507,7 @@ void UniNavGraph::calculate_query_features_only(
                }
          }
       }
-      std::cout << "- Adjacency List & Roaring Inverted Index built." << std::endl;
+      std::cout << "- Label-to-group adjacency list and CRoaring index built." << std::endl;
    }
 
    // fxy_add
@@ -5126,9 +5134,10 @@ void UniNavGraph::calculate_query_features_only(
       else {
          auto feature_start = std::chrono::high_resolution_clock::now();
          stats.query_length = query_labels.size();
-         stats.candidate_set_size = query_labels.empty() ? 0 : get_candidate_count_for_label(query_labels.back());
-         stats.trie_I_lmax = stats.candidate_set_size;
-         stats.trie_total_nodes = _trie_static_metrics.total_nodes;
+         // TFNG/ALPS/ALPS+ do not use the legacy persisted-trie features.
+         stats.candidate_set_size = 0;
+         stats.trie_I_lmax = 0;
+         stats.trie_total_nodes = 0;
 
             if (routing_mode == 4 || (routing_mode == 0 && (baseline_alg == 5 || baseline_alg == 13))) {
                // Curator (13) shares the exact same bitset filter map (bipartite
@@ -5972,13 +5981,12 @@ void UniNavGraph::calculate_query_features_only(
          // 如果是需要预测的 target，填入 batch_features 的对应槽位
          int batch_idx = id_to_batch_idx[id];
          if (batch_idx != -1) {
-               size_t cand_size = query_labels.empty() ? 0 : get_candidate_count_for_label(query_labels.back());
-               // 添加 num_descendants 到批次特征，严格对齐 Python 顺序
+               // Strictly match smart_route_train.py: Ppass, NumDescendants,
+               // QuerySize. No persisted-trie feature is needed here.
                batch_features[batch_idx] = {
                    stats.global_p_pass, 
                    static_cast<float>(num_descendants), 
-                   (float)query_labels.size(), 
-                   (float)cand_size
+                   static_cast<float>(query_labels.size())
                };
          }
       }
@@ -5989,15 +5997,7 @@ void UniNavGraph::calculate_query_features_only(
       auto pred_start = std::chrono::high_resolution_clock::now();
          if (!batch_features.empty()) {
          if (_smart_route_selector) {
-            // The SODA selector is trained with three features. Keep the
-            // fourth CandSize value in batch_features for the legacy
-            // FastSmartRoute fallback, but omit it for this selector.
-            std::vector<std::vector<float>> smart_batch_features;
-            smart_batch_features.reserve(batch_features.size());
-            for (const auto& row : batch_features) {
-               smart_batch_features.emplace_back(row.begin(), row.begin() + std::min<size_t>(3, row.size()));
-            }
-            std::vector<float> batch_preds = _smart_route_selector->predict_batch(smart_batch_features);
+            std::vector<float> batch_preds = _smart_route_selector->predict_batch(batch_features);
 
             // 顺序与 target_ids 对应，直接回写
             for (size_t i = 0; i < target_ids.size(); ++i) {
@@ -6045,17 +6045,22 @@ void UniNavGraph::calculate_query_features_only(
       std::iota(sorted_ids.begin(), sorted_ids.end(), 0);
 
       if (routing_mode != 5) return sorted_ids;
-      
-      std::vector<size_t> query_hashes(num_queries);
-      #pragma omp parallel for
-      for (int id = 0; id < (int)num_queries; ++id) {
-         const auto& labels = query_storage->get_label_set(id);
-         query_hashes[id] = std::hash<std::string>{}(std::string((char*)labels.data(), labels.size() * sizeof(ANNS::LabelType)));
-      }
 
       std::sort(sorted_ids.begin(), sorted_ids.end(), [&](int a, int b) {
          if (algo_choices[a] != algo_choices[b]) return algo_choices[a] < algo_choices[b];
-         return query_hashes[a] < query_hashes[b];
+
+         // ALPS+ keeps queries routed to the same algorithm together, then
+         // orders that group by the complete label sequence. Query labels are
+         // normalized to ascending order when loaded, so vector comparison is
+         // the required deterministic lexicographical order. A query-id tie
+         // breaker keeps identical label sets reproducible across platforms.
+         const auto& labels_a = query_storage->get_label_set(a);
+         const auto& labels_b = query_storage->get_label_set(b);
+         if (labels_a != labels_b) {
+            return std::lexicographical_compare(
+               labels_a.begin(), labels_a.end(), labels_b.begin(), labels_b.end());
+         }
+         return a < b;
       });
 
       return sorted_ids;
@@ -6365,6 +6370,7 @@ void UniNavGraph::calculate_query_features_only(
       meta_data["LNG_num_edges"] = std::to_string(_LNG_num_edges);
       meta_data["index_size(MB)"] = std::to_string(_index_size);
       meta_data["_index_size_add_rb(MB)"] = std::to_string(_index_size_add_rb);
+      meta_data["group_attr_roaring_serialized_size_bytes"] = std::to_string(_group_attr_roaring_serialized_size_bytes);
       meta_data["index_time(ms)"] = std::to_string(_index_time - _build_roaring_bitsets_time);
       meta_data["index_time_add_rb(ms)"] = std::to_string(_index_time);
       meta_data["label_processing_time(ms)"] = std::to_string(_label_processing_time);
@@ -6392,22 +6398,6 @@ void UniNavGraph::calculate_query_features_only(
       meta_data["index_size_without_rabitq(MB)"] = std::to_string(_index_size_add_rb);
       meta_data["index_size_with_rabitq(MB)"] = std::to_string(_index_size_add_rb);
 
-      // FXY_ADD: 计算并保存 Trie 静态指标
-      std::cout << "Calculating and saving Trie static metrics..." << std::endl;
-      TrieStaticMetrics trie_metrics = _trie_index.calculate_static_metrics();
-      meta_data["trie_label_cardinality"] = std::to_string(trie_metrics.label_cardinality);
-      meta_data["trie_total_nodes"] = std::to_string(trie_metrics.total_nodes);
-      meta_data["trie_avg_path_length"] = std::to_string(trie_metrics.avg_path_length);
-      meta_data["trie_avg_branching_factor"] = std::to_string(trie_metrics.avg_branching_factor);
-      // Save the detailed label frequency distribution to its own file for easier analysis
-      std::string trie_freq_filename = results_path_prefix + "trie_label_frequency.csv";
-      std::ofstream freq_file(trie_freq_filename);
-      freq_file << "LabelID,Frequency\n";
-      for (const auto &pair : trie_metrics.label_frequency)
-         freq_file << pair.first << "," << pair.second << "\n";
-      freq_file.close();
-      std::cout << "- Trie label frequency distribution saved to " << trie_freq_filename << std::endl;
-
       std::string meta_filename = index_path_prefix + "meta";
       write_kv_file(meta_filename, meta_data);
 
@@ -6431,6 +6421,7 @@ void UniNavGraph::calculate_query_features_only(
       build_time_file << "rabitq_build_time" << "," << _rabitq_build_time_ms << "\n";
       build_time_file << "favor_build_time" << "," << _favor_build_time_ms << "\n";
       build_time_file << "favor_serialized_size_bytes" << "," << _favor_serialized_index_size_bytes << "\n";
+      build_time_file << "group_attr_roaring_serialized_size_bytes" << "," << _group_attr_roaring_serialized_size_bytes << "\n";
       build_time_file.close();
 
       // save vectors and label sets
@@ -6458,10 +6449,6 @@ void UniNavGraph::calculate_query_features_only(
       // save new to old vec ids
       std::string new_to_old_vec_ids_filename = index_path_prefix + "new_to_old_vec_ids";
       write_1d_vector(new_to_old_vec_ids_filename, _new_to_old_vec_ids);
-
-      // save trie index
-      std::string trie_filename = index_path_prefix + "trie";
-      _trie_index.save(trie_filename);
 
       // save graph data
       std::string graph_filename = index_path_prefix + "graph";
@@ -6510,6 +6497,17 @@ void UniNavGraph::calculate_query_features_only(
       save_roaring_vector(lng_descendants_rb_filename, _lng_descendants_rb);
       std::string covered_sets_rb_filename = index_path_prefix + "covered_sets_rb.bin";
       save_roaring_vector(covered_sets_rb_filename, _covered_sets_rb);
+
+      // Save the label -> group CRoaring inverted index. Query-time loading
+      // uses the attr-id mapping persisted in vector_attr_graph.
+      std::string group_attr_roaring_filename = index_path_prefix + "group_attr_roaring_inv.bin";
+      save_roaring_vector(group_attr_roaring_filename, _group_attr_roaring_inv);
+      if (!fs::exists(group_attr_roaring_filename) ||
+          fs::file_size(group_attr_roaring_filename) != _group_attr_roaring_serialized_size_bytes)
+      {
+         throw std::runtime_error("Failed to persist a complete label-to-group CRoaring index: " +
+                                  group_attr_roaring_filename);
+      }
 
       if (_rabitq_side_index.enabled())
       {
@@ -6705,14 +6703,6 @@ void UniNavGraph::calculate_query_features_only(
       }
       std::cout << "- Reverse ID map built successfully." << std::endl;
 
-      // load trie index
-      std::string trie_filename = index_path_prefix + "trie";
-      _trie_index.load(trie_filename);
-      // --- 预计算并缓存 Trie 静态指标 ---
-      std::cout << "Pre-calculating and caching Trie static metrics..." << std::endl;
-      _trie_static_metrics = _trie_index.calculate_static_metrics();
-      std::cout << "- Caching complete." << std::endl;
-
       // load graph data
       std::string graph_filename = index_path_prefix + "graph";
       _graph = std::make_shared<Graph>(_base_storage->get_num_points());
@@ -6776,6 +6766,34 @@ void UniNavGraph::calculate_query_features_only(
       {
          load_bipartite_graph(vector_attr_graph_filename);
          build_vector_inverted_indices();
+
+         const std::string group_attr_roaring_filename = index_path_prefix + "group_attr_roaring_inv.bin";
+         bool group_attr_roaring_loaded = false;
+         if (fs::exists(group_attr_roaring_filename))
+         {
+            load_roaring_vector(group_attr_roaring_filename, _group_attr_roaring_inv);
+            group_attr_roaring_loaded = (_group_attr_roaring_inv.size() == _num_attributes);
+            if (group_attr_roaring_loaded)
+            {
+               _group_attr_roaring_serialized_size_bytes = fs::file_size(group_attr_roaring_filename);
+               std::cout << "- Label-to-group CRoaring index loaded directly." << std::endl;
+            }
+            else
+            {
+               std::cerr << "[Warning] Invalid label-to-group CRoaring index: expected "
+                         << _num_attributes << " bitmaps, got " << _group_attr_roaring_inv.size()
+                         << ". Rebuilding it from group_id_to_label_set." << std::endl;
+            }
+         }
+
+         if (!group_attr_roaring_loaded)
+         {
+            if (!fs::exists(group_attr_roaring_filename))
+            {
+               std::cout << "- Legacy index has no group_attr_roaring_inv.bin; rebuilding in memory." << std::endl;
+            }
+            build_group_inverted_indices();
+         }
       }
       else
       {
@@ -7294,28 +7312,6 @@ void UniNavGraph::calculate_query_features_only(
          }
       }
 
-      // load idea1 selector
-      std::string model_path = selector_modle_prefix + "/intelElS/idea1_selector_model_final.onnx";
-      std::cout << "Loading Trie method selector model from " << model_path << " ..." << std::endl;
-      try
-      {
-         if (fs::exists(model_path))
-         {
-            _trie_method_selector = std::make_unique<MethodSelector>(model_path);
-            std::cout << "- Model loaded successfully." << std::endl;
-         }
-         else
-         {
-            std::cerr << "- WARNING: Model file not found. Will use default method passed by command line." << std::endl;
-            _trie_method_selector = nullptr;
-         }
-      }
-      catch (const std::exception &e)
-      {
-         std::cerr << "- ERROR: Failed to load model: " << e.what() << ". Will use default method." << std::endl;
-         _trie_method_selector = nullptr;
-      }
-
       // Load the ALPS routing model.
       _smart_route_target_alg_id = 11;
       const auto smart_route_model_dir = resolve_smart_route_model_dir(selector_modle_prefix);
@@ -7554,7 +7550,6 @@ void UniNavGraph::calculate_query_features_only(
       _index_size += _group_id_to_range.size() * sizeof(IdxType) * 2;
       _index_size += _group_entry_points.size() * sizeof(IdxType);
       _index_size += _new_to_old_vec_ids.size() * sizeof(IdxType);
-      _index_size += _trie_index.get_index_size();
       _index_size += _graph->get_index_size();
 
       _index_size_add_rb = _index_size; // 记录不含 Roaring Bitmap 部分的索引大小
@@ -7598,7 +7593,6 @@ void UniNavGraph::calculate_query_features_only(
       _index_size += _group_id_to_range.size() * sizeof(IdxType) * 2;
       _index_size += _group_entry_points.size() * sizeof(IdxType);
       _index_size += _new_to_old_vec_ids.size() * sizeof(IdxType);
-      _index_size += _trie_index.get_index_size();
       _index_size += _graph->get_index_size();
 
       // --- 统计 _label_nav_graph (LNG) 的大小 ---
@@ -7643,6 +7637,15 @@ void UniNavGraph::calculate_query_features_only(
                _index_size_add_rb += rb.getSizeInBytes();
          }
       }
+
+      // Exact serialized size of group_attr_roaring_inv.bin: vector length,
+      // one payload-length field per bitmap, and the CRoaring payloads.
+      _group_attr_roaring_serialized_size_bytes = sizeof(uint64_t);
+      for (const auto &rb : _group_attr_roaring_inv)
+      {
+         _group_attr_roaring_serialized_size_bytes += sizeof(size_t) + rb.getSizeInBytes();
+      }
+      _index_size_add_rb += _group_attr_roaring_serialized_size_bytes;
 
       // return as MB
       _index_size /= 1024 * 1024;

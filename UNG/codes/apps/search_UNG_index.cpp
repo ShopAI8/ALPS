@@ -187,7 +187,6 @@ int main(int argc, char **argv)
    index.load(index_path_prefix, selector_modle_prefix, data_type, dataset, routing_mode, baseline_alg);
    index.set_ung_distance_mode(ung_distance_mode);
    index.prepare_rabitq_query_contexts(query_storage, query_bin_file);
-   index.build_group_inverted_indices();
 
    // Load the per-query source-group id file.
    std::vector<ANNS::IdxType> true_query_group_ids;

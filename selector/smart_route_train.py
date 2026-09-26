@@ -38,25 +38,20 @@ BASE_DIR = os.environ.get(
 )
 EDA_ROOT_DIR = os.path.join(BASE_DIR, "EDA_Plots_try")
 
-# MODELS_TO_TRY = ["RandomForest", "XGBoost", "LightGBM", "DecisionTree"]
-# MODELS_TO_TRY = ["XGBoost"]
+MODELS_TO_TRY = ["RandomForest", "XGBoost", "LightGBM", "DecisionTree"]
 DEFAULT_ROUTER_MODEL = "XGBoost"
 MIN_RECALL_THRESHOLD = 0.90
+QPS_ROUND_DECIMALS = 6
+ROUTING_TIE_BREAK_ORDER = ("TFNG", "FAVOR", "pre-filter")
 # Per-dataset min-recall overrides. Fall back to MIN_RECALL_THRESHOLD when unset.
 DATASET_MIN_RECALL_THRESHOLDS = {
     "Laion": 0.90,
-}
-MARGIN_THRESHOLD = 0 
-DATASET_MARGIN_THRESHOLDS = {
-    "Tiktok": 0,
-    "Reviews": 0,
 }
 USE_SMOTE = False
 
 # Retry once with looser labeling thresholds when pairwise training collapses
 # into a single class. This does not affect normally trainable cases.
 SINGLE_LABEL_RETRY_MIN_RECALL = 0.9
-SINGLE_LABEL_RETRY_MARGIN_THRESHOLD = 0
 
 ROUTE_STRATEGY = {
     "default": "auto"
@@ -85,14 +80,14 @@ AVAILABLE_ROUTING_CONFIGS = ["FAVOR"]
 
 # Whether to train pairwise "two-out-of-three" models by default.
 # True:
-#   Train only FAVOR vs UNG+, FAVOR vs pre-filter, and UNG+ vs pre-filter
+#   Train only FAVOR vs TFNG, FAVOR vs pre-filter, and TFNG vs pre-filter
 # False:
 #   Train both the original 3-way model and the three pairwise models above
 DEFAULT_PAIRWISE_ONLY = False
 
 # Whether to train only the original 3-way model by default.
 # True:
-#   Train only the full candidate set, such as FAVOR / UNG+ / pre-filter
+#   Train only the full candidate set, such as TFNG / FAVOR / pre-filter
 # False:
 #   Pairwise training is controlled by DEFAULT_PAIRWISE_ONLY and CLI flags
 DEFAULT_FULL_MODEL_ONLY = True
@@ -179,19 +174,49 @@ def build_leave1_summary_output_dir(config_name):
 def get_min_recall_threshold(dataset_name):
     return DATASET_MIN_RECALL_THRESHOLDS.get(dataset_name, MIN_RECALL_THRESHOLD)
 
-def get_margin_threshold(dataset_name):
-    return DATASET_MARGIN_THRESHOLDS.get(dataset_name, MARGIN_THRESHOLD)
+def routing_tie_break_rank(algo):
+    """Map stored algorithm names to TFNG -> FAVOR -> pre-filter priority."""
+    normalized = str(algo).strip().lower()
+    if normalized in {"tfng", "ung++", "ung++-sorted-lng"}:
+        return 0
+    if normalized == "favor" or normalized.startswith("favor-"):
+        return 1
+    if normalized in {"pre-filter", "prefilter", "pre_filter"}:
+        return 2
+    return len(ROUTING_TIE_BREAK_ORDER)
 
-def label_best_algorithm_by_time(df, algo_list, time_prefix='L1_Time_ms', min_recall=MIN_RECALL_THRESHOLD, threshold=0.15):
+def choose_by_routing_tie_order(candidates):
+    """Choose deterministically among already tied candidate dictionaries."""
+    return min(candidates, key=lambda candidate: (
+        routing_tie_break_rank(candidate["algo"]),
+        str(candidate["algo"])
+    ))
+
+def label_best_algorithm_by_qps(
+    df,
+    algo_list,
+    time_prefix='L1_Time_ms',
+    min_recall=MIN_RECALL_THRESHOLD,
+    qps_round_decimals=QPS_ROUND_DECIMALS
+):
+    """Label by recall threshold, rounded QPS, recall, then fixed algorithm order."""
     best_algos = []
-    fuzzy_count = 0
-    for idx, row in df.iterrows():
+    for _, row in df.iterrows():
         candidates = []
         for algo in algo_list:
             recall_col = f'Recall_{algo}'
             time_col = f'{time_prefix}_{algo}'
             if recall_col in row and time_col in row and pd.notna(row[recall_col]) and pd.notna(row[time_col]):
-                candidates.append({'algo': algo, 'recall': row[recall_col], 'time': row[time_col]})
+                time_ms = float(row[time_col])
+                if time_ms <= 0:
+                    continue
+                qps = round(1000.0 / time_ms, qps_round_decimals)
+                candidates.append({
+                    'algo': algo,
+                    'recall': float(row[recall_col]),
+                    'time': time_ms,
+                    'qps': qps
+                })
                 
         if not candidates:
             best_algos.append('Unknown')
@@ -200,21 +225,26 @@ def label_best_algorithm_by_time(df, algo_list, time_prefix='L1_Time_ms', min_re
         qualified = [c for c in candidates if c['recall'] >= min_recall]
         
         if not qualified:
-            best = max(candidates, key=lambda x: x['recall'])
-            best_algos.append(best['algo'])
+            # Preserve the existing fallback: if no candidate reaches the
+            # recall target, select the highest-recall candidate. Resolve an
+            # exact recall tie with the same deterministic paradigm order.
+            max_recall = max(candidate['recall'] for candidate in candidates)
+            recall_tied = [
+                candidate for candidate in candidates
+                if np.isclose(candidate['recall'], max_recall, rtol=0.0, atol=1e-12)
+            ]
+            best_algos.append(choose_by_routing_tie_order(recall_tied)['algo'])
         else:
-            qualified.sort(key=lambda x: x['time'])
-            best = qualified[0]
-            
-            if len(qualified) > 1:
-                second_best = qualified[1]
-                time_diff_percent = (second_best['time'] - best['time']) / (best['time'] + 1e-9)
-                if time_diff_percent < threshold:
-                    best_algos.append('Unknown')
-                    fuzzy_count += 1
-                    continue
-                    
-            best_algos.append(best['algo'])
+            max_qps = max(candidate['qps'] for candidate in qualified)
+            qps_tied = [candidate for candidate in qualified if candidate['qps'] == max_qps]
+
+            max_recall = max(candidate['recall'] for candidate in qps_tied)
+            recall_tied = [
+                candidate for candidate in qps_tied
+                if np.isclose(candidate['recall'], max_recall, rtol=0.0, atol=1e-12)
+            ]
+
+            best_algos.append(choose_by_routing_tie_order(recall_tied)['algo'])
             
     return pd.Series(best_algos, index=df.index)
 
@@ -250,12 +280,19 @@ def prepare_routing_training_data(df, dataset_name, algo_list, route_scope_name)
         return None
 
     min_recall_threshold = get_min_recall_threshold(dataset_name)
-    margin_threshold = get_margin_threshold(dataset_name)
-    print(f"🎯 {route_scope_name} 使用 min_recall={min_recall_threshold}, margin={margin_threshold}")
+    print(
+        f"🎯 {route_scope_name} 使用 min_recall={min_recall_threshold}, "
+        f"QPS 保留 {QPS_ROUND_DECIMALS} 位小数, "
+        f"平局顺序={' > '.join(ROUTING_TIE_BREAK_ORDER)}"
+    )
 
     work_df = df.copy()
-    work_df['Global_Best'] = label_best_algorithm_by_time(
-        work_df, algo_list, time_prefix='L1_Time_ms', min_recall=min_recall_threshold, threshold=margin_threshold
+    work_df['Global_Best'] = label_best_algorithm_by_qps(
+        work_df,
+        algo_list,
+        time_prefix='L1_Time_ms',
+        min_recall=min_recall_threshold,
+        qps_round_decimals=QPS_ROUND_DECIMALS
     )
     work_df['Target'] = work_df['Global_Best']
     unknown_count = int((work_df['Global_Best'] == 'Unknown').sum())
@@ -274,16 +311,16 @@ def prepare_routing_training_data(df, dataset_name, algo_list, route_scope_name)
     if y_valid.nunique() < 2:
         print(
             f"⚠️ {route_scope_name} 当前阈值下仅存在单一标签 {sorted(y_valid.unique())}，"
-            f"尝试使用更宽松阈值重打标: min_recall={SINGLE_LABEL_RETRY_MIN_RECALL}, "
-            f"margin={SINGLE_LABEL_RETRY_MARGIN_THRESHOLD}"
+            f"尝试使用更宽松阈值重打标: "
+            f"min_recall={SINGLE_LABEL_RETRY_MIN_RECALL}"
         )
         retry_df = df.copy()
-        retry_df['Global_Best'] = label_best_algorithm_by_time(
+        retry_df['Global_Best'] = label_best_algorithm_by_qps(
             retry_df,
             algo_list,
             time_prefix='L1_Time_ms',
             min_recall=SINGLE_LABEL_RETRY_MIN_RECALL,
-            threshold=SINGLE_LABEL_RETRY_MARGIN_THRESHOLD
+            qps_round_decimals=QPS_ROUND_DECIMALS
         )
         retry_df['Target'] = retry_df['Global_Best']
         retry_valid_mask = (retry_df['Global_Best'] != 'Unknown')
@@ -1561,7 +1598,7 @@ def parse_args():
     parser.add_argument(
         "--full-model-only",
         action="store_true",
-        help="Only train the original full multi-class model, for example FAVOR / UNG+ / pre-filter, without pairwise models.",
+        help="Only train the original full multi-class model, for example TFNG / FAVOR / pre-filter, without pairwise models.",
     )
     parser.add_argument(
         "--eval-data-root",
@@ -1664,7 +1701,7 @@ def main():
     train_pairwise_models = not full_model_only
 
     if full_model_only:
-        print("🧭 当前模式: 仅训练原始三分类模型（如 FAVOR / UNG+ / pre-filter）")
+        print("🧭 当前模式: 仅训练原始三分类模型（如 TFNG / FAVOR / pre-filter）")
     elif pairwise_only:
         print("🧭 当前模式: 仅训练 pairwise 模型")
     else:
