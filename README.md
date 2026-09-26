@@ -221,7 +221,7 @@ The following parameters in the configuration files or scripts determine the beh
 | Parameter | Description | Values / Notes |
 | :--- | :--- | :--- |
 | `ROUTING_MODE` | Determines the routing logic. | `0`: Baseline mode; `1`: **ALPS**; `5`: **ALPS+**. |
-| `BASELINE_ALG` | Specifies the algorithm when `ROUTING_MODE=0`. | `0`: UNG; `2`: ACORN-gamma; `4`: NaviX; `5`: Pre-Filtering; `6`: ACORN-1; `8`: UNG+; `9`: Milvus-IVF; `10`: Milvus-HNSW; `11`: FAVOR; `12`: FAVOR-HNSW; `13`: Curator; `14`: UNG++; `15`: TFNG. |
+| `BASELINE_ALG` | Specifies the algorithm when `ROUTING_MODE=0`. | `0`: UNG; `2`: ACORN-gamma; `4`: NaviX; `5`: Pre-Filtering; `6`: ACORN-1; `9`: Milvus-IVF; `10`: Milvus-HNSW; `11`: FAVOR; `12`: FAVOR-HNSW; `13`: Curator; `15`: TFNG. |
 | `BUILD_MODE` | Specifies the index construction mode. | `parallel`: Build all indexes in parallel; `acorn_only`: Build only the ACORN index. |
 | `Lsearch` | Search parameter for UNG. | Similar to `efSearch` in HNSW; controls the search depth. |
 | `efs_start/step` | Search parameters for ACORN/NaviX. | Used to dynamically adjust the filtering strength during search. |
