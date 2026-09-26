@@ -138,7 +138,7 @@ The following parameters in the configuration files or scripts determine the beh
 | `ROUTING_MODE` | Determines the routing logic. | `0`: **TFNG**; `1`: **ALPS**; `5`: **ALPS+**. |
 | `BASELINE_ALG` | Selects TFNG when `ROUTING_MODE=0`. | `15`: **TFNG**. |
 | `BUILD_MODE` | Specifies the index construction mode. | `serial`, `parallel`, `all`, `ung_only`, `favor_only`, `skip`, or `compile`. |
-| `Lsearch` | Search parameter for UNG. | Similar to `efSearch` in HNSW; controls the search depth. |
+| `Lsearch` | Search parameter for TFNG. | Similar to `efSearch` in HNSW; controls the search depth. |
 | `efs_start/step` | FAVOR-HNSW search parameters used internally by ALPS. | Controls the internal graph-search breadth; ALPS class 0 defaults to this ef-aligned path. |
 
 ---
