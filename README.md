@@ -104,12 +104,9 @@ The host dataset root must contain one directory per dataset. For example:
     ├── Genome_base.bin
     ├── Genome_base.fvecs
     ├── Genome_base_labels.txt
-    ├── Genome_base_labels_info.log
-    ├── tree_roots.txt
-    └── query_select_200_A_B_C-weighted-sub-base-123456789_random_300/
+query_select_200_A_B_C-weighted-sub-base-123456789_random_300/
         ├── Genome_query.fvecs
         ├── Genome_query_labels.txt
-        └── Genome_query_source_groups.txt
 ```
 
 The exact query directory name must match `query_dir_name` in the selected
