@@ -1,276 +1,215 @@
 {
-   "experiments": [
-      {
-         "dataset_name": "Genome",
-         "shared_config": {
-            "data_dir": "/noraiddata/lijiakang/FilterVector/FilterVectorData/Genome",
-            "output_dir": "/noraiddata/lijiakang/FilterVector/FilterVectorResults/",
-            "build_mode": "serial",
-            "max_degree": 32,
-            "Lbuild": 100,
-            "alpha": 1.2,
-            "num_cross_edges": 6,
-            "num_entry_points": 16,
-            "Lsearch_start": 10,
-            "Lsearch_end": 200,
-            "Lsearch_step": 10,
-            "num_threads": 100,
-            "K": 10,
-            "num_repeats": 1,
-            "acorn_params": {
-               "N": 108077,
-               "M": 32,
-               "M_beta": 64,
-               "gamma": 80,
-               "lsearch_threshold": 5000
-            }
-         },
-         "tasks": [
-            {
-               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789",
-               "acorn_search_params": {
-                  "acorn_efs_start": 100,
-                  "acorn_efs_step_slow": 100,
-                  "acorn_efs_step_fast": 100
-               },
-               "algorithms": [
-                  "ALPS",
-                  "ALPS+",
-                  "pre-filter",
-                  "Milvus-IVF",
-                  "Milvus-HNSW"
-               ]
-            }
-         ]
+  "experiments": [
+    {
+      "dataset_name": "Genome",
+      "shared_config": {
+        "data_dir": "/noraiddata/lijiakang/FilterVector/FilterVectorData/Genome",
+        "output_dir": "/noraiddata/lijiakang/FilterVector/FilterVectorResults/",
+        "build_mode": "serial",
+        "max_degree": 32,
+        "Lbuild": 100,
+        "alpha": 1.2,
+        "num_cross_edges": 6,
+        "num_entry_points": 16,
+        "Lsearch_start": 10,
+        "Lsearch_end": 200,
+        "Lsearch_step": 10,
+        "num_threads": 100,
+        "K": 10,
+        "num_repeats": 1,
+        "alps_params": {
+          "efs_threshold": 5000
+        }
       },
-      {
-         "dataset_name": "Genome",
-         "shared_config": {
-            "data_dir": "/your_path/FilterVector/FilterVectorData/Genome",
-            "output_dir": "/your_path/FilterVector/FilterVectorResults/",
-            "build_mode": "serial",
-            "max_degree": 32,
-            "Lbuild": 100,
-            "alpha": 1.2,
-            "num_cross_edges": 6,
-            "num_entry_points": 16,
-            "Lsearch_start": 1000,
-            "Lsearch_end": 40000,
-            "Lsearch_step": 1000,
-            "num_threads": 100,
-            "K": 10,
-            "num_repeats": 1,
-            "acorn_params": {
-               "N": 108077,
-               "M": 32,
-               "M_beta": 64,
-               "gamma": 80,
-               "lsearch_threshold": 5000
-            }
-         },
-         "tasks": [
-            {
-               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789",
-               "acorn_search_params": {
-                  "acorn_efs_start": 100,
-                  "acorn_efs_step_slow": 100,
-                  "acorn_efs_step_fast": 100
-               },
-               "algorithms": [
-                  "TFNG",
-                  "UNG-nTfalse"
-               ]
-            }
-         ]
+      "tasks": [
+        {
+          "query_dir_name": "query_A_B_C-weighted-sub-base-123456789",
+          "algorithms": [
+            "ALPS",
+            "ALPS+"
+          ],
+          "alps_search_params": {
+            "efs_start": 100,
+            "efs_step_slow": 100,
+            "efs_step_fast": 100
+          }
+        }
+      ]
+    },
+    {
+      "dataset_name": "Genome",
+      "shared_config": {
+        "data_dir": "/your_path/FilterVector/FilterVectorData/Genome",
+        "output_dir": "/your_path/FilterVector/FilterVectorResults/",
+        "build_mode": "serial",
+        "max_degree": 32,
+        "Lbuild": 100,
+        "alpha": 1.2,
+        "num_cross_edges": 6,
+        "num_entry_points": 16,
+        "Lsearch_start": 1000,
+        "Lsearch_end": 40000,
+        "Lsearch_step": 1000,
+        "num_threads": 100,
+        "K": 10,
+        "num_repeats": 1,
+        "alps_params": {
+          "efs_threshold": 5000
+        }
       },
-      {
-         "dataset_name": "Genome",
-         "shared_config": {
-            "data_dir": "/your_path/FilterVector/FilterVectorData/Genome",
-            "output_dir": "/your_path/FilterVector/FilterVectorResults/",
-            "build_mode": "serial",
-            "max_degree": 32,
-            "Lbuild": 100,
-            "alpha": 1.2,
-            "num_cross_edges": 6,
-            "num_entry_points": 16,
-            "Lsearch_start": 10,
-            "Lsearch_end": 200,
-            "Lsearch_step": 10,
-            "num_threads": 100,
-            "K": 10,
-            "num_repeats": 1,
-            "acorn_params": {
-               "N": 108077,
-               "M": 32,
-               "M_beta": 64,
-               "gamma": 80,
-               "lsearch_threshold": 5000
-            }
-         },
-         "tasks": [
-            {
-               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789",
-               "acorn_search_params": {
-                  "acorn_efs_start": 100,
-                  "acorn_efs_step_slow": 100,
-                  "acorn_efs_step_fast": 100
-               },
-               "algorithms": [
-                  "ACORN-gamma",
-                  "ACORN-1",
-                  "NaviX-ACORN"
-               ]
-            },
-            {
-               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_len_large",
-               "acorn_search_params": {
-                  "acorn_efs_start": 100,
-                  "acorn_efs_step_slow": 100,
-                  "acorn_efs_step_fast": 100
-               },
-               "algorithms": [
-                  "ALPS",
-                  "ALPS+",
-                  "pre-filter",
-                  "Milvus-IVF",
-                  "Milvus-HNSW",
-                  "ACORN-gamma",
-                  "ACORN-1",
-                  "NaviX-ACORN"
-               ]
-            },
-            {
-               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_len_small",
-               "acorn_search_params": {
-                  "acorn_efs_start": 100,
-                  "acorn_efs_step_slow": 100,
-                  "acorn_efs_step_fast": 100
-               },
-               "algorithms": [
-                  "ALPS",
-                  "ALPS+",
-                  "pre-filter",
-                  "Milvus-IVF",
-                  "Milvus-HNSW",
-                  "ACORN-gamma",
-                  "ACORN-1",
-                  "NaviX-ACORN"
-               ]
-            },
-            {
-               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_ppass_large",
-               "acorn_search_params": {
-                  "acorn_efs_start": 100,
-                  "acorn_efs_step_slow": 100,
-                  "acorn_efs_step_fast": 100
-               },
-               "algorithms": [
-                  "ALPS",
-                  "ALPS+",
-                  "pre-filter",
-                  "Milvus-IVF",
-                  "Milvus-HNSW",
-                  "ACORN-gamma",
-                  "ACORN-1",
-                  "NaviX-ACORN"
-               ]
-            },
-            {
-               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_ppass_small",
-               "acorn_search_params": {
-                  "acorn_efs_start": 100,
-                  "acorn_efs_step_slow": 100,
-                  "acorn_efs_step_fast": 100
-               },
-               "algorithms": [
-                  "ALPS",
-                  "ALPS+",
-                  "pre-filter",
-                  "Milvus-IVF",
-                  "Milvus-HNSW",
-                  "ACORN-gamma",
-                  "ACORN-1",
-                  "NaviX-ACORN"
-               ]
-            }
-         ]
+      "tasks": [
+        {
+          "query_dir_name": "query_A_B_C-weighted-sub-base-123456789",
+          "algorithms": [
+            "TFNG"
+          ],
+          "alps_search_params": {
+            "efs_start": 100,
+            "efs_step_slow": 100,
+            "efs_step_fast": 100
+          }
+        }
+      ]
+    },
+    {
+      "dataset_name": "Genome",
+      "shared_config": {
+        "data_dir": "/your_path/FilterVector/FilterVectorData/Genome",
+        "output_dir": "/your_path/FilterVector/FilterVectorResults/",
+        "build_mode": "serial",
+        "max_degree": 32,
+        "Lbuild": 100,
+        "alpha": 1.2,
+        "num_cross_edges": 6,
+        "num_entry_points": 16,
+        "Lsearch_start": 10,
+        "Lsearch_end": 200,
+        "Lsearch_step": 10,
+        "num_threads": 100,
+        "K": 10,
+        "num_repeats": 1,
+        "alps_params": {
+          "efs_threshold": 5000
+        }
       },
-      {
-         "dataset_name": "Genome",
-         "shared_config": {
-            "data_dir": "/your_path/FilterVector/FilterVectorData/Genome",
-            "output_dir": "/your_path/FilterVector/FilterVectorResults/",
-            "build_mode": "serial",
-            "max_degree": 32,
-            "Lbuild": 100,
-            "alpha": 1.2,
-            "num_cross_edges": 6,
-            "num_entry_points": 16,
-            "Lsearch_start": 1000,
-            "Lsearch_end": 40000,
-            "Lsearch_step": 1000,
-            "num_threads": 100,
-            "K": 10,
-            "num_repeats": 1,
-            "acorn_params": {
-               "N": 108077,
-               "M": 32,
-               "M_beta": 64,
-               "gamma": 80,
-               "lsearch_threshold": 5000
-            }
-         },
-         "tasks": [
-            {
-               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_len_large",
-               "acorn_search_params": {
-                  "acorn_efs_start": 100,
-                  "acorn_efs_step_slow": 100,
-                  "acorn_efs_step_fast": 100
-               },
-               "algorithms": [
-                  "TFNG",
-                  "UNG-nTfalse"
-               ]
-            },
-            {
-               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_len_small",
-               "acorn_search_params": {
-                  "acorn_efs_start": 100,
-                  "acorn_efs_step_slow": 100,
-                  "acorn_efs_step_fast": 100
-               },
-               "algorithms": [
-                  "TFNG",
-                  "UNG-nTfalse"
-               ]
-            },
-            {
-               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_ppass_large",
-               "acorn_search_params": {
-                  "acorn_efs_start": 100,
-                  "acorn_efs_step_slow": 100,
-                  "acorn_efs_step_fast": 100
-               },
-               "algorithms": [
-                  "TFNG",
-                  "UNG-nTfalse"
-               ]
-            },
-            {
-               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_ppass_small",
-               "acorn_search_params": {
-                  "acorn_efs_start": 100,
-                  "acorn_efs_step_slow": 100,
-                  "acorn_efs_step_fast": 100
-               },
-               "algorithms": [
-                  "TFNG",
-                  "UNG-nTfalse"
-               ]
-            }
-         ]
-      }
-   ]
+      "tasks": [
+        {
+          "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_len_large",
+          "algorithms": [
+            "ALPS",
+            "ALPS+"
+          ],
+          "alps_search_params": {
+            "efs_start": 100,
+            "efs_step_slow": 100,
+            "efs_step_fast": 100
+          }
+        },
+        {
+          "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_len_small",
+          "algorithms": [
+            "ALPS",
+            "ALPS+"
+          ],
+          "alps_search_params": {
+            "efs_start": 100,
+            "efs_step_slow": 100,
+            "efs_step_fast": 100
+          }
+        },
+        {
+          "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_ppass_large",
+          "algorithms": [
+            "ALPS",
+            "ALPS+"
+          ],
+          "alps_search_params": {
+            "efs_start": 100,
+            "efs_step_slow": 100,
+            "efs_step_fast": 100
+          }
+        },
+        {
+          "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_ppass_small",
+          "algorithms": [
+            "ALPS",
+            "ALPS+"
+          ],
+          "alps_search_params": {
+            "efs_start": 100,
+            "efs_step_slow": 100,
+            "efs_step_fast": 100
+          }
+        }
+      ]
+    },
+    {
+      "dataset_name": "Genome",
+      "shared_config": {
+        "data_dir": "/your_path/FilterVector/FilterVectorData/Genome",
+        "output_dir": "/your_path/FilterVector/FilterVectorResults/",
+        "build_mode": "serial",
+        "max_degree": 32,
+        "Lbuild": 100,
+        "alpha": 1.2,
+        "num_cross_edges": 6,
+        "num_entry_points": 16,
+        "Lsearch_start": 1000,
+        "Lsearch_end": 40000,
+        "Lsearch_step": 1000,
+        "num_threads": 100,
+        "K": 10,
+        "num_repeats": 1,
+        "alps_params": {
+          "efs_threshold": 5000
+        }
+      },
+      "tasks": [
+        {
+          "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_len_large",
+          "algorithms": [
+            "TFNG"
+          ],
+          "alps_search_params": {
+            "efs_start": 100,
+            "efs_step_slow": 100,
+            "efs_step_fast": 100
+          }
+        },
+        {
+          "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_len_small",
+          "algorithms": [
+            "TFNG"
+          ],
+          "alps_search_params": {
+            "efs_start": 100,
+            "efs_step_slow": 100,
+            "efs_step_fast": 100
+          }
+        },
+        {
+          "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_ppass_large",
+          "algorithms": [
+            "TFNG"
+          ],
+          "alps_search_params": {
+            "efs_start": 100,
+            "efs_step_slow": 100,
+            "efs_step_fast": 100
+          }
+        },
+        {
+          "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_ppass_small",
+          "algorithms": [
+            "TFNG"
+          ],
+          "alps_search_params": {
+            "efs_start": 100,
+            "efs_step_slow": 100,
+            "efs_step_fast": 100
+          }
+        }
+      ]
+    }
+  ]
 }

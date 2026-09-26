@@ -6,17 +6,7 @@ set(CMAKE_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-option(ENABLE_KNOWHERE_MILVUS_BASELINE "Enable Milvus baseline via Knowhere engine" ON)
-set(ENABLE_KNOWHERE_MILVUS_BASELINE ON CACHE BOOL "Enable Milvus baseline via Knowhere engine")
 option(UNG_ENABLE_RABITQ "Enable RabitQ side-index acceleration" OFF)
-set(KNOWHERE_INCLUDE_DIR "" CACHE PATH "Knowhere include directory (should contain knowhere/index/index_factory.h)")
-set(KNOWHERE_LIBRARY "" CACHE FILEPATH "Path to libknowhere.so or libknowhere.a")
-
-# Add the ACORN/Faiss project as a subdirectory of the UNG project
-set(FAISS_ENABLE_GPU OFF CACHE BOOL "Disable Faiss GPU support")
-set(FAISS_ENABLE_PYTHON OFF CACHE BOOL "Disable Faiss Python bindings")
-set(BUILD_TESTING OFF CACHE BOOL "Disable Faiss tests")
-add_subdirectory(../../ACORN ${CMAKE_BINARY_DIR}/acorn_build)
 
 # Boost
 find_package(Boost REQUIRED COMPONENTS program_options filesystem)
@@ -61,51 +51,6 @@ if(UNG_ENABLE_RABITQ)
     include_directories(${PROJECT_SOURCE_DIR}/../../../RaBitQ/RaBitQ-Library/include)
 endif()
 
-if(ENABLE_KNOWHERE_MILVUS_BASELINE)
-    if(NOT EXISTS "${KNOWHERE_INCLUDE_DIR}/knowhere/index/index_factory.h")
-        message(FATAL_ERROR "Knowhere is mandatory but KNOWHERE_INCLUDE_DIR is invalid: ${KNOWHERE_INCLUDE_DIR}")
-    endif()
-    if(NOT EXISTS "${KNOWHERE_LIBRARY}")
-        message(FATAL_ERROR "Knowhere is mandatory but KNOWHERE_LIBRARY not found: ${KNOWHERE_LIBRARY}")
-    endif()
-else()
-    message(STATUS "Knowhere (Milvus) baseline disabled. OK for non-Milvus algorithms.")
-endif()
-find_library(URING_LIB NAMES uring)
-if(URING_LIB)
-    message(STATUS "liburing found at: ${URING_LIB}")
-    add_link_options(-Wl,--no-as-needed)
-else()
-    message(WARNING "liburing not found. Knowhere/Folly link may fail on io_uring symbols.")
-endif()
-if(ENABLE_KNOWHERE_MILVUS_BASELINE)
-    add_compile_definitions(ENABLE_KNOWHERE_MILVUS_BASELINE=1)
-    add_compile_definitions(GLOG_USE_GLOG_EXPORT=1)
-    include_directories(${KNOWHERE_INCLUDE_DIR})
-    get_filename_component(KNOWHERE_LIB_DIR "${KNOWHERE_LIBRARY}" DIRECTORY)
-    set(KNOWHERE_MILVUS_COMMON_INCLUDE "${KNOWHERE_LIB_DIR}/milvus-common-src/include")
-    if(EXISTS "${KNOWHERE_MILVUS_COMMON_INCLUDE}/filemanager/FileManager.h")
-        include_directories(${KNOWHERE_MILVUS_COMMON_INCLUDE})
-        message(STATUS "Knowhere extra include enabled: ${KNOWHERE_MILVUS_COMMON_INCLUDE}")
-    endif()
-    file(GLOB KNOWHERE_CONAN_NLOHMANN_CANDIDATES "$ENV{HOME}/.conan2/p/b/nlohm*/p/include")
-    if(KNOWHERE_CONAN_NLOHMANN_CANDIDATES)
-        list(GET KNOWHERE_CONAN_NLOHMANN_CANDIDATES 0 KNOWHERE_CONAN_NLOHMANN_INCLUDE)
-        include_directories(BEFORE ${KNOWHERE_CONAN_NLOHMANN_INCLUDE})
-        message(STATUS "Knowhere nlohmann include enabled: ${KNOWHERE_CONAN_NLOHMANN_INCLUDE}")
-    endif()
-    file(GLOB KNOWHERE_CONAN_INCLUDE_DIRS
-        "$ENV{HOME}/.conan2/p/*/p/include"
-        "$ENV{HOME}/.conan2/p/b/*/p/include")
-    if(KNOWHERE_CONAN_INCLUDE_DIRS)
-        list(FILTER KNOWHERE_CONAN_INCLUDE_DIRS EXCLUDE REGEX ".*/boost[^/]*/p/include$")
-        list(REMOVE_DUPLICATES KNOWHERE_CONAN_INCLUDE_DIRS)
-        include_directories(BEFORE ${KNOWHERE_CONAN_INCLUDE_DIRS})
-        list(LENGTH KNOWHERE_CONAN_INCLUDE_DIRS KNOWHERE_CONAN_INCLUDE_COUNT)
-        message(STATUS "Knowhere conan include roots enabled: ${KNOWHERE_CONAN_INCLUDE_COUNT}")
-    endif()
-    message(STATUS "Knowhere baseline enabled. include=${KNOWHERE_INCLUDE_DIR}, lib=${KNOWHERE_LIBRARY}")
-endif()
 
 # Find pre-built CRoaring library
 set(ROARING_LIB_DIR "${PROJECT_SOURCE_DIR}/third_party/CRoaring/build/src")
@@ -133,38 +78,6 @@ if(EXISTS ${ONNXRUNTIME_DIR})
 else()
     message(FATAL_ERROR "ONNX Runtime not found at specified path: ${ONNXRUNTIME_DIR}. Please check the path in CMakeLists.txt")
 endif()
-
-# ==============================================================================
-# Curator (multi-tenant hierarchical index) — isolated build, no global includes
-# All Curator headers are PRIVATE to the curator_faiss target
-# ==============================================================================
-add_subdirectory(curator)
-
-# ==============================================================================
-# Include NaviX, the standalone Faiss 1.10.0 variant
-# ==============================================================================
-set(NAVIX_ROOT "${PROJECT_SOURCE_DIR}/../../NaviX")
-include_directories(${NAVIX_ROOT})
-
-# Allow external build scripts to provide the actual NAVIX_BUILD_DIR
-if(NOT NAVIX_BUILD_DIR)
-    set(NAVIX_BUILD_DIR "${NAVIX_ROOT}/build")
-endif()
-
-# Locate libfaiss_avx2.a or libfaiss.a
-find_library(NAVIX_LIB
-    NAMES faiss_avx2 faiss
-    PATHS "${NAVIX_BUILD_DIR}/faiss_navix" "${NAVIX_BUILD_DIR}/faiss"
-    NO_DEFAULT_PATH
-)
-
-if(NOT NAVIX_LIB)
-    message(FATAL_ERROR "NaviX library not found in ${NAVIX_BUILD_DIR}! Please build NaviX first.")
-else()
-    message(STATUS "NaviX library found at: ${NAVIX_LIB}")
-endif()
-# ==============================================================================
-# ==============================================================================
 
 # add subdirectories
 add_subdirectory(vamana)

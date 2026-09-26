@@ -4,7 +4,6 @@ FROM ubuntu:22.04
 ARG DEBIAN_FRONTEND=noninteractive
 ARG BUILD_JOBS=8
 ARG PREBUILD=1
-ARG ENABLE_KNOWHERE=0
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -16,20 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc-11 \
         git \
         jq \
-        libaio-dev \
         libboost-filesystem-dev \
         libboost-program-options-dev \
-        libcurl4-openssl-dev \
-        libdouble-conversion-dev \
-        libevent-dev \
-        libgflags-dev \
         libgtest-dev \
-        liblapack-dev \
-        libopenblas-dev \
         libomp-dev \
-        liburing-dev \
         ninja-build \
-        nlohmann-json3-dev \
         numactl \
         pkg-config \
         python3 \
@@ -59,32 +49,12 @@ RUN cmake -S UNG/codes/third_party/CRoaring \
           -DROARING_USE_CPM=OFF \
     && cmake --build UNG/codes/third_party/CRoaring/build --parallel "${BUILD_JOBS}"
 
-# Knowhere powers the two Milvus baselines and is intentionally opt-in because
-# its Conan dependency build is large. Core ALPS/UNG/ACORN/FAVOR/NaviX does not
-# require it.
-RUN if [[ "${ENABLE_KNOWHERE}" == "1" ]]; then \
-        python -m pip install --no-cache-dir conan==2.25.1; \
-        conan profile detect --force; \
-        conan remote add default-conan-local2 \
-          https://milvus01.jfrog.io/artifactory/api/conan/default-conan-local2 --force; \
-        make -C knowhere -j"${BUILD_JOBS}"; \
-    fi
-
 # Compile once into a shared build directory. exp.sh reuses these artifacts for
 # every dataset instead of recompiling them under build_para_<dataset>.
 RUN mkdir -p /opt/alps-build /tmp/alps-empty-data /tmp/alps-build-output \
     && if [[ "${PREBUILD}" == "1" ]]; then \
-         if [[ "${ENABLE_KNOWHERE}" == "1" ]]; then \
-           export KNOWHERE_INCLUDE_DIR=/workspace/ALPS/knowhere/include; \
-           export KNOWHERE_LIBRARY=/workspace/ALPS/knowhere/build/Release/libknowhere.so; \
-         else \
-           export KNOWHERE_INCLUDE_DIR=/nonexistent/knowhere/include; \
-           export KNOWHERE_LIBRARY=/nonexistent/libknowhere.so; \
-         fi; \
          BUILD_JOBS="${BUILD_JOBS}" \
-         NAVIX_BUILD_DIR=/opt/alps-build/navix \
          UNG_BUILD_DIR=/opt/alps-build/ung \
-         ACORN_BUILD_DIR=/opt/alps-build/acorn \
          FAVOR_BUILD_DIR=/opt/alps-build/favor \
          bash build_hybrid.sh \
            --build_mode compile \
@@ -96,11 +66,7 @@ RUN mkdir -p /opt/alps-build /tmp/alps-empty-data /tmp/alps-build-output \
            --Lbuild 100 \
            --alpha 1.2 \
            --num_cross_edges 6 \
-           --num_entry_points 16 \
-           --acorn_n 1 \
-           --acorn_m 32 \
-           --acorn_m_beta 64 \
-           --acorn_gamma 80; \
+           --num_entry_points 16; \
        fi \
     && rm -rf /tmp/alps-empty-data /tmp/alps-build-output
 
@@ -109,7 +75,7 @@ ENV ALPS_BUILD_ROOT=/opt/alps-build \
     ALPS_OUTPUT_ROOT=/results \
     ALPS_RESULTS_DIR=/results \
     ALPS_ENABLE_PERF=auto \
-    LD_LIBRARY_PATH=/workspace/ALPS/UNG/codes/third_party/onnxruntime-linux-x64-1.16.3/lib:/workspace/ALPS/knowhere/build/Release
+    LD_LIBRARY_PATH=/workspace/ALPS/UNG/codes/third_party/onnxruntime-linux-x64-1.16.3/lib
 
 VOLUME ["/data", "/results"]
 CMD ["bash"]

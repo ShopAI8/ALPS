@@ -1,5 +1,7 @@
 #include <chrono>
+#include <atomic>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <iostream>
@@ -12,38 +14,18 @@
 #include "utils.h"
 #include <roaring/roaring.h>
 #include <roaring/roaring.hh>
-#include <faiss_navix/IndexHNSW.h>
-#include <faiss_navix/index_io.h>
-#include <faiss/IndexACORN.h>
-#include <faiss/index_io.h>
 
 namespace po = boost::program_options;
 namespace fs = boost::filesystem;
 
-// Helper: compute recall for a single query, including distance-tie handling.
+// Compute strict Recall@K from result IDs.  Distances are intentionally not
+// used as a fallback: a close vector that is absent from the filtered ground
+// truth is not a valid hit, and default-initialized (id=0, distance=0) entries
+// must never inflate recall.
 float calculate_single_query_recall(const std::pair<ANNS::IdxType, float> *gt,
                                     const std::pair<ANNS::IdxType, float> *results,
                                     ANNS::IdxType K)
 {
-   // 1. Read the distance threshold of the K-th GT result.
-   // GT is sorted, and `pair.second` stores the distance.
-   // If GT contains fewer than K valid results, fall back to the last valid one.
-   float gt_threshold = 0.0f;
-   if (K > 0 && gt[K - 1].first != -1) {
-       gt_threshold = gt[K - 1].second;
-   } else {
-       // If GT is shorter than K, use the last valid distance instead.
-       for(int i = K - 1; i >= 0; i--) {
-           if(gt[i].first != -1) {
-               gt_threshold = gt[i].second;
-               break;
-           }
-       }
-   }
-   
-   // Allow a small floating-point tolerance.
-   float epsilon = 1e-6; 
-
    std::unordered_set<ANNS::IdxType> gt_set;
    for (int i = 0; i < K; ++i)
    {
@@ -55,29 +37,19 @@ float calculate_single_query_recall(const std::pair<ANNS::IdxType, float> *gt,
    
    if (gt_set.empty()) return 1.0f; // Empty GT is treated as full recall.
 
-   int correct = 0;
+   std::unordered_set<ANNS::IdxType> matched_result_ids;
    for (int i = 0; i < K; ++i)
    {
       if (results[i].first == -1) continue;
-
-      // Condition 1: exact ID match.
-      if (gt_set.count(results[i].first))
-      {
-         correct++;
-      }
-      // Condition 2: ID differs, but the distance is still within the GT tie threshold.
-      // This assumes `results[i].second` is a valid distance value.
-      else if (results[i].second <= gt_threshold + epsilon)
-      {
-         correct++;
-      }
+      if (gt_set.count(results[i].first)) matched_result_ids.insert(results[i].first);
    }
 
+   const int correct = static_cast<int>(matched_result_ids.size());
+
    // Debug: print first query
-   static int dbg_cnt = 0;
-   if (dbg_cnt++ < 2) {
-       std::cout << "[RECALL DEBUG] gt_threshold=" << gt_threshold
-                 << " gt_set_size=" << gt_set.size() << " correct=" << correct
+   static std::atomic<int> dbg_cnt{0};
+   if (dbg_cnt.fetch_add(1, std::memory_order_relaxed) < 2) {
+       std::cout << "[RECALL DEBUG] gt_set_size=" << gt_set.size() << " correct=" << correct
                  << " recall=" << static_cast<float>(correct) / gt_set.size() << std::endl;
        std::cout << "[RECALL DEBUG] GT top-3: ";
        for (int i = 0; i < std::min((int)K, 3); ++i)
@@ -92,101 +64,20 @@ float calculate_single_query_recall(const std::pair<ANNS::IdxType, float> *gt,
    return static_cast<float>(correct) / gt_set.size();
 }
 
-bool export_acorn_level0_graph(const std::string &acorn_index_path,
-                               const std::string &output_path)
-{
-   if (acorn_index_path.empty())
-   {
-      std::cerr << "ERROR: --acorn_index_path is required for --export_acorn_level0_graph" << std::endl;
-      return false;
-   }
-   if (output_path.empty())
-   {
-      std::cerr << "ERROR: --export_acorn_level0_graph output path is empty" << std::endl;
-      return false;
-   }
-
-   std::cout << "[Export] Loading ACORN index from: " << acorn_index_path << std::endl;
-   faiss::Index *raw_index = nullptr;
-   try
-   {
-      raw_index = faiss::read_index(acorn_index_path.c_str());
-   }
-   catch (const std::exception &e)
-   {
-      std::cerr << "ERROR: Failed to read ACORN index: " << e.what() << std::endl;
-      return false;
-   }
-
-   std::unique_ptr<faiss::Index> index_guard(raw_index);
-   auto *acorn_index = dynamic_cast<faiss::IndexACORN *>(raw_index);
-   if (!acorn_index)
-   {
-      std::cerr << "ERROR: The loaded index is not faiss::IndexACORN-compatible." << std::endl;
-      return false;
-   }
-
-   std::ofstream out(output_path);
-   if (!out)
-   {
-      std::cerr << "ERROR: Cannot open output file: " << output_path << std::endl;
-      return false;
-   }
-
-   const faiss::idx_t n = acorn_index->ntotal;
-   size_t edge_count = 0;
-   for (faiss::idx_t i = 0; i < n; ++i)
-   {
-      size_t begin = 0;
-      size_t end = 0;
-      acorn_index->acorn.neighbor_range(i, 0, &begin, &end);
-
-      out << i << ":";
-      bool first = true;
-      for (size_t j = begin; j < end; ++j)
-      {
-         const int v = acorn_index->acorn.neighbors[j];
-         if (v < 0 || v >= n)
-         {
-            continue;
-         }
-         out << (first ? " " : ",") << v;
-         first = false;
-         ++edge_count;
-      }
-      out << "\n";
-   }
-
-   std::cout << "[Export] ACORN level-0 graph exported successfully." << std::endl;
-   std::cout << "[Export] nodes=" << n << ", edges=" << edge_count << std::endl;
-   std::cout << "[Export] output=" << output_path << std::endl;
-   return true;
-}
-
-
 int main(int argc, char **argv)
 {
    std::string data_type, dist_fn, scenario;
    std::string base_bin_file, query_bin_file, base_label_file, query_label_file, gt_file, index_path_prefix, result_path_prefix, selector_modle_prefix, query_group_id_file;
-   std::string acorn_index_path, acorn_1_index_path, navix_index_path, algo_choice_csv_path;
-   std::string curator_index_path;
-   std::string export_acorn_level0_graph_path;
+   std::string algo_choice_csv_path;
    ANNS::IdxType K, num_entry_points;
    std::vector<ANNS::IdxType> Lsearch_list;
    uint32_t num_threads;
    bool is_new_method = false;                                 // true: use new method
    bool is_new_trie_method = false, is_rec_more_start = false; // false: original UNG trie method; true: recursive variant. false: default root strategy.
    bool is_ung_more_entry = false;                             // false: original UNG entry-point selection; true: allow more entry points.
-   // bool is_bfs_filter = true;                               // true: original ACORN; false: improved variant.
-   int baseline_alg = 0; // 0/1/8=UNG, 2/3/4/6=ACORN, 5=pre-filter, 7=NaviX, 9=Milvus-IVF, 10=Milvus-HNSW, 11=FAVOR, 12=FAVOR-HNSW, 13=Curator
-   // Curator parameters (defaults from original curator-v2 paper)
-   int curator_nlist = 32;
-   int curator_nprobe = 1200;        // matches original Curator default
-   int curator_max_leaf_size = 256;  // matches original max_sl_size default
-   int curator_search_ef = 128;      // middle of paper's [32,64,128,256,512] sweep
-   int curator_beam_size = 1;
+   int baseline_alg = 15; // TFNG; ALPS and ALPS+ use routing modes 1 and 5.
    int num_repeats = 1;                                        // Run one repeat by default.
-   int routing_mode = 0;                                      // 0: auto, 1: UNG (nT=false), 2: UNG-nTtrue, 3: ACORN
+   int routing_mode = 0;                                      // 0: TFNG, 1: ALPS, 5: ALPS+
    int lsearch_start, lsearch_step;
    int efs_start, efs_step_slow, efs_step_fast, lsearch_threshold;
    std::string dataset; 
@@ -223,13 +114,6 @@ int main(int argc, char **argv)
                          "Path to selector_modle_prefix");
       desc.add_options()("query_group_id_file", po::value<std::string>(&query_group_id_file)->default_value(""),
                          "Optional per-query source-group ID file");
-      desc.add_options()("acorn_index_path", po::value<std::string>(&acorn_index_path)->default_value(""),
-                         "acorn_index_path");
-      desc.add_options()("acorn_1_index_path", po::value<std::string>(&acorn_1_index_path)->default_value(""),
-                         "acorn_1_index_path");
-      desc.add_options()("export_acorn_level0_graph", po::value<std::string>(&export_acorn_level0_graph_path)->default_value(""),
-                         "Export ACORN level-0 adjacency list to the given path and exit without running search");
-
       // graph search parameters
       desc.add_options()("scenario", po::value<std::string>(&scenario)->default_value("containment"),
                          "Scenario for building UniNavGraph, <equality/containment/overlap/nofilter>");
@@ -245,42 +129,24 @@ int main(int argc, char **argv)
                          "is_new_trie_method");
       desc.add_options()("is_rec_more_start", po::value<bool>(&is_rec_more_start)->required(),
                          "is_rec_more_start");
-      // desc.add_options()("is_bfs_filter", po::value<bool>(&is_bfs_filter)->default_value(true), "Whether to use BFS filter in ACORN");
-      desc.add_options()("baseline_alg", po::value<int>(&baseline_alg)->default_value(0), "Algorithm selector: 0/1/8=UNG family, 2/3/4/6=ACORN family, 5=pre-filter, 7=NaviX, 9=Milvus-IVF, 10=Milvus-HNSW, 11=FAVOR, 12=FAVOR-HNSW, 14=UNG++(bitmap ELS), 15=UNG++(sorted-LNG ELS)");
+      desc.add_options()("baseline_alg", po::value<int>(&baseline_alg)->default_value(15), "Algorithm selector used only with routing_mode=0; supported value: 15 (TFNG)");
       desc.add_options()("num_repeats", po::value<int>(&num_repeats)->default_value(1),
                          "Number of repeats for each Lsearch value");
       desc.add_options()("routing_mode", po::value<int>(&routing_mode)->required(),
-                         "0: auto, 1: SODA, 2: FastSmartRoute, 3: FastSmartRoute+, 5: SODA+, 6: SmartRoute++, 7: SmartRoute+++, 8: ALPS-fixed");
+                         "Supported modes: 0=TFNG, 1=ALPS, 5=ALPS+");
       desc.add_options()("algo_choice_csv", po::value<std::string>(&algo_choice_csv_path)->default_value(""),
                          "Optional CSV path for per-query algorithm override. Format: QueryID,Algo_Choice");
       desc.add_options()("lsearch_start", po::value<int>(&lsearch_start)->required(), "Lsearch start value");
       desc.add_options()("lsearch_step", po::value<int>(&lsearch_step)->required(), "Lsearch step value");
-      desc.add_options()("efs_start", po::value<int>(&efs_start)->required(), "ACORN efs start value");
-      desc.add_options()("efs_step_slow", po::value<int>(&efs_step_slow)->required(), "ACORN efs step value");
-      desc.add_options()("efs_step_fast", po::value<int>(&efs_step_fast)->required(), "ACORN efs step value");
+      desc.add_options()("efs_start", po::value<int>(&efs_start)->required(), "FAVOR-HNSW ef start value");
+      desc.add_options()("efs_step_slow", po::value<int>(&efs_step_slow)->required(), "FAVOR-HNSW ef slow step");
+      desc.add_options()("efs_step_fast", po::value<int>(&efs_step_fast)->required(), "FAVOR-HNSW ef fast step");
       desc.add_options()("lsearch_threshold", po::value<int>(&lsearch_threshold)->required(), "lsearch_threshold");
       desc.add_options()("ung_distance_mode", po::value<std::string>(&ung_distance_mode)->default_value("exact"),
                          "UNG distance mode: exact or rabitq");
 
-      // NaviX
-      desc.add_options()("navix_index_path", po::value<std::string>(&navix_index_path)->default_value(""), "Path to NaviX index");
-
       desc.add_options()("optimize_standalone_prefilter", po::value<bool>(&optimize_standalone_prefilter)->default_value(false),
                    "Whether to fully optimize pre-filter when running as standalone baseline");
-
-      // Curator
-      desc.add_options()("curator_nlist", po::value<int>(&curator_nlist)->default_value(32),
-                   "Curator: number of clusters (<=64)");
-      desc.add_options()("curator_nprobe", po::value<int>(&curator_nprobe)->default_value(16),
-                   "Curator: number of probes for unfiltered search");
-      desc.add_options()("curator_max_leaf_size", po::value<int>(&curator_max_leaf_size)->default_value(128),
-                   "Curator: max vectors per leaf");
-      desc.add_options()("curator_search_ef", po::value<int>(&curator_search_ef)->default_value(10),
-                   "Curator: search expansion factor (must be >= 1)");
-      desc.add_options()("curator_beam_size", po::value<int>(&curator_beam_size)->default_value(1),
-                   "Curator: beam search width");
-      desc.add_options()("curator_index_path", po::value<std::string>(&curator_index_path)->default_value(""),
-                   "Curator: path to save/load curator index");
 
       po::variables_map vm;
       po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -289,19 +155,18 @@ int main(int argc, char **argv)
          std::cout << desc;
          return 0;
       }
-      if (vm.count("export_acorn_level0_graph") &&
-          !vm["export_acorn_level0_graph"].as<std::string>().empty())
-      {
-         const std::string export_path = vm["export_acorn_level0_graph"].as<std::string>();
-         const std::string export_acorn_path =
-             vm.count("acorn_index_path") ? vm["acorn_index_path"].as<std::string>() : "";
-         return export_acorn_level0_graph(export_acorn_path, export_path) ? 0 : -1;
-      }
       po::notify(vm);
    }
+
    catch (const std::exception &ex)
    {
       std::cerr << ex.what() << std::endl;
+      return -1;
+   }
+
+   if (!((routing_mode == 0 && baseline_alg == 15) || routing_mode == 1 || routing_mode == 5))
+   {
+      std::cerr << "Unsupported selection. Use TFNG (routing_mode=0, baseline_alg=15), ALPS (routing_mode=1), or ALPS+ (routing_mode=5)." << std::endl;
       return -1;
    }
 
@@ -319,40 +184,10 @@ int main(int argc, char **argv)
    // load index
    ANNS::UniNavGraph index(query_storage->get_num_points());
 
-   if (routing_mode == 0 && baseline_alg == 13) {
-       // Curator-only mode: load base data directly, skip UNG graph/trie
-       std::cout << "[SODA] Curator-only mode: loading base data, skipping UNG index" << std::endl;
-       auto base_storage = ANNS::create_storage(data_type);
-       base_storage->load_from_file(base_bin_file, base_label_file);
-       index.set_base_storage(base_storage);
-       index.configure_curator(curator_nlist, curator_nprobe, curator_max_leaf_size, curator_search_ef, curator_beam_size);
-       if (curator_index_path.empty()) {
-           curator_index_path = std::string(index_path_prefix) + "curator_index.bin";
-       }
-       index.build_curator(curator_index_path);
-   } else {
-       index.load(index_path_prefix, selector_modle_prefix, data_type, acorn_index_path, acorn_1_index_path,
-                  dataset, routing_mode, baseline_alg);
-       index.set_ung_distance_mode(ung_distance_mode);
-       index.prepare_rabitq_query_contexts(query_storage, query_bin_file);
-       index.build_group_inverted_indices();
-   }
-
-
-   // Naxiv
-   const bool navix_needed = (routing_mode == 0 && baseline_alg == 7) || (routing_mode != 0);
-   faiss_navix::IndexHNSWFlat* navix_index = nullptr;
-   if (!navix_index_path.empty() && fs::exists(navix_index_path)) {
-      std::cout << "[SODA] Loading NaviX index from: " << navix_index_path << std::endl;
-      faiss_navix::Index* raw_navix = faiss_navix::read_index(navix_index_path.c_str());
-      navix_index = dynamic_cast<faiss_navix::IndexHNSWFlat*>(raw_navix);
-      if (!navix_index) {
-         std::cerr << "ERROR: Failed to cast loaded NaviX index to faiss_navix::IndexHNSWFlat" << std::endl;
-         delete raw_navix;
-      }
-   } else if (navix_needed) {
-      std::cout << "[Warning] NaviX index path is empty or does not exist. NaviX routing will fail." << std::endl;
-   }
+   index.load(index_path_prefix, selector_modle_prefix, data_type, dataset, routing_mode, baseline_alg);
+   index.set_ung_distance_mode(ung_distance_mode);
+   index.prepare_rabitq_query_contexts(query_storage, query_bin_file);
+   index.build_group_inverted_indices();
 
    // Load the per-query source-group id file.
    std::vector<ANNS::IdxType> true_query_group_ids;
@@ -385,7 +220,7 @@ int main(int argc, char **argv)
    auto results = new std::pair<ANNS::IdxType, float>[num_queries * K];
    std::vector<int> query_algo_choices = index.load_query_algo_choices_from_csv(algo_choice_csv_path, num_queries);
 
-   // ==================== [SODA+/SmartRoute+++ global preprocessing (run once)] ====================
+   // ==================== ALPS+ global preprocessing (run once) ====================
    std::vector<ANNS::QueryStats> global_pred_stats(num_queries);
    double total_global_pred_time = 0.0;
    double total_global_sort_time = 0.0;
@@ -393,7 +228,7 @@ int main(int argc, char **argv)
    std::vector<int> sorted_query_ids(num_queries);
    std::iota(sorted_query_ids.begin(), sorted_query_ids.end(), 0);
 
-   if (routing_mode == 5 || routing_mode == 7) {
+   if (routing_mode == 5) {
        // --- Run several trials and keep the shortest global-prediction time ---
        double min_pred_time = std::numeric_limits<double>::max();
        std::vector<int> best_choices;
@@ -408,7 +243,7 @@ int main(int argc, char **argv)
            );
            double trial_time = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - global_pred_start).count();
            
-           std::cout << "[SODA" << (routing_mode == 7 ? "+++" : "+") << "] Trial " << trial + 1 << " Prediction Time: " << trial_time << " ms" << std::endl;
+           std::cout << "[ALPS+] Trial " << trial + 1 << " Prediction Time: " << trial_time << " ms" << std::endl;
            
            if (trial_time < min_pred_time) {
                min_pred_time = trial_time;
@@ -421,19 +256,19 @@ int main(int argc, char **argv)
        final_global_choices = std::move(best_choices);
        global_pred_stats = std::move(best_stats);
        total_global_pred_time = min_pred_time;
-       std::cout << "\n[SODA" << (routing_mode == 7 ? "+++" : "+") << "] Best Global Prediction Time: " << total_global_pred_time << " ms" << std::endl;
+       std::cout << "\n[ALPS+] Best Global Prediction Time: " << total_global_pred_time << " ms" << std::endl;
 
        // 2. Global cache-friendly sorting.
        auto global_sort_start = std::chrono::high_resolution_clock::now();
        sorted_query_ids = index.get_sorted_query_ids(query_storage, final_global_choices, routing_mode);
        total_global_sort_time = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - global_sort_start).count();
-       std::cout << "[SODA" << (routing_mode == 7 ? "+++" : "+") << "] Global Sort Time: " << total_global_sort_time << " ms" << std::endl;
+       std::cout << "[ALPS+] Global Sort Time: " << total_global_sort_time << " ms" << std::endl;
 
        double avg_sort_ms = total_global_sort_time / num_queries;
        for (int i = 0; i < (int)num_queries; ++i) {
            global_pred_stats[i].global_sort_time_ms = avg_sort_ms;
        }
-       std::cout << "[SODA" << (routing_mode == 7 ? "+++" : "+") << "] Total Preprocessing Time: " << (total_global_pred_time + total_global_sort_time) << " ms" << std::endl;
+       std::cout << "[ALPS+] Total Preprocessing Time: " << (total_global_pred_time + total_global_sort_time) << " ms" << std::endl;
    }
    // ====================================================================================
 
@@ -509,7 +344,7 @@ int main(int argc, char **argv)
    index.warmup_selectors(num_threads);
    std::cout << "--- Warm-up Finished ---"<< std::endl;
 
-   if (baseline_alg == 8 || routing_mode == 1 || routing_mode == 5 || routing_mode == 6 || routing_mode == 7) {
+   if (routing_mode == 1 || routing_mode == 5) {
     index.skip_els_filter = true;
     std::cout << "[UNG+] Mode Enabled: ELS filtering will be skipped." << std::endl;
    }
@@ -566,13 +401,24 @@ int main(int argc, char **argv)
          ANNS::IdxType current_Lsearch = Lsearch_list[LsearchId];
          std::vector<float> num_cmps(num_queries);
 
+         // A few search branches can legitimately return early (for example,
+         // when no entry point exists).  Reset the entire output buffer so an
+         // early return is represented as an invalid result, never as the
+         // default pair value (id=0, distance=0).
+         std::fill(
+             results,
+             results + static_cast<size_t>(num_queries) * K,
+             std::make_pair(
+                 static_cast<ANNS::IdxType>(-1),
+                 std::numeric_limits<float>::max()));
+
          // --- 1. Build this round's query queue and pass down global preprocessing data ---
          std::queue<int> task_queue;
          for (int id : sorted_query_ids) {
              task_queue.push(id);
          }
 
-         if (routing_mode == 5 || routing_mode == 7) {
+         if (routing_mode == 5) {
              for (int i = 0; i < (int)num_queries; ++i) {
                  query_stats[repeat][LsearchId][i].mask_gen_time_ms = global_pred_stats[i].mask_gen_time_ms;
                  query_stats[repeat][LsearchId][i].route_pred_time_ms = global_pred_stats[i].route_pred_time_ms;
@@ -582,12 +428,7 @@ int main(int argc, char **argv)
              }
          }
 
-         // --- 2. For Curator: repurpose Lsearch as search_ef sweep parameter ---
-         if (routing_mode == 0 && baseline_alg == 13) {
-             ANNS::curator_update_search_ef(index.get_curator_context(), static_cast<int>(current_Lsearch));
-         }
-
-         // --- 3. Time and execute the search ---
+         // --- 2. Time and execute the search ---
          auto start_time = std::chrono::high_resolution_clock::now();
          if (!is_new_method)
          {
@@ -596,13 +437,13 @@ int main(int argc, char **argv)
          else
          {
              index.search_hybrid(query_storage, distance_handler, num_threads, current_Lsearch,
-                                num_entry_points, scenario, K, results, num_cmps, query_stats[repeat][LsearchId],is_new_trie_method, is_rec_more_start, is_ung_more_entry, lsearch_start, lsearch_step, efs_start, efs_step_slow,efs_step_fast,lsearch_threshold,routing_mode, baseline_alg ,navix_index, true_query_group_ids, final_global_choices, task_queue, optimize_standalone_prefilter);
+                                num_entry_points, scenario, K, results, num_cmps, query_stats[repeat][LsearchId],is_new_trie_method, is_rec_more_start, is_ung_more_entry, lsearch_start, lsearch_step, efs_start, efs_step_slow,efs_step_fast,lsearch_threshold,routing_mode, baseline_alg, true_query_group_ids, final_global_choices, task_queue, optimize_standalone_prefilter);
          }
          double pure_search_time = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - start_time).count();
          
          // --- 3. Apply batch-time compensation ---
          double time_cost = pure_search_time;
-         if (routing_mode == 5 || routing_mode == 7) {
+         if (routing_mode == 5) {
              time_cost += (total_global_pred_time + total_global_sort_time);
          }
 
@@ -867,10 +708,6 @@ int main(int argc, char **argv)
    }
    detail_out.close();
    
-   if (navix_index) {
-       delete navix_index;
-   }
-
    std::cout << "- all done" << std::endl;
    return 0;
 }

@@ -11,8 +11,6 @@ target_link_libraries(fvecs_to_bin
     ${PROJECT_NAME}
     ${ROARING_LIB}
     onnxruntime
-    faiss
-    ${NAVIX_LIB}
 )
 
 add_executable(generate_base_labels generate_base_labels.cpp)
@@ -22,8 +20,6 @@ target_link_libraries(generate_base_labels
     ${PROJECT_NAME}
     ${ROARING_LIB}
     onnxruntime
-    faiss
-    ${NAVIX_LIB}
 )
 
 add_executable(generate_query_labels generate_query_labels.cpp)
@@ -33,8 +29,6 @@ target_link_libraries(generate_query_labels
     ${PROJECT_NAME}
     ${ROARING_LIB}
     onnxruntime
-    faiss
-    ${NAVIX_LIB}
 )
 
 add_executable(compute_groundtruth compute_groundtruth.cpp)
@@ -44,8 +38,6 @@ target_link_libraries(compute_groundtruth
     ${PROJECT_NAME}
     ${ROARING_LIB}
     onnxruntime
-    faiss
-    ${NAVIX_LIB}
 )
 
 add_executable(generate_mixed_queries generate_mixed_queries.cpp)
@@ -55,6 +47,4 @@ target_link_libraries(generate_mixed_queries
     ${PROJECT_NAME}
     ${ROARING_LIB}
     onnxruntime
-    faiss
-    ${NAVIX_LIB}
 )

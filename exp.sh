@@ -24,6 +24,19 @@ if ! command -v jq &> /dev/null; then
     exit 1
 fi
 
+if [[ -n "${ALPS_ALGORITHMS:-}" ]]; then
+    IFS=',' read -r -a requested_algorithms <<< "$ALPS_ALGORITHMS"
+    for requested_algorithm in "${requested_algorithms[@]}"; do
+        case "$requested_algorithm" in
+            ALPS|ALPS+|TFNG) ;;
+            *)
+                echo "错误: 不支持算法 '$requested_algorithm'。当前仅支持 ALPS、ALPS+ 和 TFNG。"
+                exit 1
+                ;;
+        esac
+    done
+fi
+
 echo "成功找到配置文件: $CONFIG_FILE"
 echo "开始执行实验..."
 
@@ -55,70 +68,40 @@ while read -r dataset_config; do
     LSEARCH_STEP=$(echo "$SHARED_CONFIG" | jq -r '.Lsearch_step')
     NUM_THREADS=$(echo "$SHARED_CONFIG" | jq -r '.num_threads')
     NUM_REPEATS=$(echo "$SHARED_CONFIG" | jq -r '.num_repeats')
-    # Read shared ACORN build parameters.
-    ACORN_N=$(echo "$SHARED_CONFIG" | jq -r '.acorn_params.N')
-    ACORN_M=$(echo "$SHARED_CONFIG" | jq -r '.acorn_params.M')
-    ACORN_M_BETA=$(echo "$SHARED_CONFIG" | jq -r '.acorn_params.M_beta')
-    ACORN_GAMMA=$(echo "$SHARED_CONFIG" | jq -r '.acorn_params.gamma')
-    LSEARCH_THRESHOLD=$(echo "$SHARED_CONFIG" | jq -r '.acorn_params.lsearch_threshold')
+    # ALPS switches between the slow and fast FAVOR-HNSW ef increments at this
+    # Lsearch threshold.
+    LSEARCH_THRESHOLD=$(echo "$SHARED_CONFIG" | jq -r '.alps_params.efs_threshold')
     BUILD_RABITQ_SIDE_INDEX=$(echo "$SHARED_CONFIG" | jq -r '.build_rabitq_side_index // false')
     RABITQ_TOTAL_BITS=$(echo "$SHARED_CONFIG" | jq -r '.rabitq_total_bits // 4')
     UNG_DISTANCE_MODE_DEFAULT=$(echo "$SHARED_CONFIG" | jq -r '.ung_distance_mode // "exact"')
     OPTIMIZE_STANDALONE_PREFILTER=$(echo "$SHARED_CONFIG" | jq -r '.optimize_standalone_prefilter // false')
     SELECTOR_MODEL_PATH_DEFAULT=$(echo "$SHARED_CONFIG" | jq -r '.selector_model_path // ""')
+    # The C++ router maps the historical class label FAVOR to the ef-aligned
+    # FAVOR-HNSW path.  Keep this optional override empty by default so result
+    # directories remain Results/ALPS and Results/ALPS+.
     ROUTER_ZERO_ALGORITHM_DEFAULT=$(echo "$SHARED_CONFIG" | jq -r '.router_zero_algorithm // ""')
     RESULT_NAME_SUFFIX_DEFAULT=$(echo "$SHARED_CONFIG" | jq -r '.result_name_suffix // ""')
     ALGO_CHOICE_CSV_DEFAULT=$(echo "$SHARED_CONFIG" | jq -r '.algo_choice_csv // ""')
-
-    # Read shared Curator parameters
-    CURATOR_NLIST=$(echo "$SHARED_CONFIG" | jq -r '.curator_params.nlist // "32"')
-    CURATOR_NPROBE=$(echo "$SHARED_CONFIG" | jq -r '.curator_params.nprobe // "1200"')
-    CURATOR_MAX_LEAF_SIZE=$(echo "$SHARED_CONFIG" | jq -r '.curator_params.max_leaf_size // "256"')
-    CURATOR_BEAM_SIZE=$(echo "$SHARED_CONFIG" | jq -r '.curator_params.beam_size // "1"')
-    export CURATOR_NLIST CURATOR_NPROBE CURATOR_MAX_LEAF_SIZE CURATOR_BEAM_SIZE
 
     # Resolve the project root from PROJECT_ROOT, or infer it from this script.
     PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
     if [[ -n "${ALPS_BUILD_ROOT:-}" ]]; then
         export UNG_BUILD_DIR="${ALPS_BUILD_ROOT%/}/ung"
-        export ACORN_BUILD_DIR="${ALPS_BUILD_ROOT%/}/acorn"
-        export NAVIX_BUILD_DIR="${ALPS_BUILD_ROOT%/}/navix"
         export FAVOR_BUILD_DIR="${ALPS_BUILD_ROOT%/}/favor"
     else
         export UNG_BUILD_DIR="${PROJECT_ROOT}/build_para_${DATASET}/ung"
-        export ACORN_BUILD_DIR="${PROJECT_ROOT}/build_para_${DATASET}/acorn"
-        export NAVIX_BUILD_DIR="${PROJECT_ROOT}/build_para_${DATASET}/navix"
+        export FAVOR_BUILD_DIR="${PROJECT_ROOT}/build_para_${DATASET}/favor"
     fi
     BUILD_ONLY_INDEX_PREPARED=false
 
-    # Resolve Knowhere paths. Prefer this checkout, then reuse the shared
-    # FilterVectorCode build when the local source tree has not been built.
-    LOCAL_KNOWHERE_DIR="${SCRIPT_DIR}/knowhere"
-    SHARED_KNOWHERE_DIR="${PROJECT_ROOT}/FilterVectorCode/knowhere"
-    if [[ -z "${KNOWHERE_INCLUDE_DIR:-}" || -z "${KNOWHERE_LIBRARY:-}" ]]; then
-        KNOWHERE_DIR="${LOCAL_KNOWHERE_DIR}"
-        if [[ ! -f "${LOCAL_KNOWHERE_DIR}/build/Release/libknowhere.so" && \
-              -f "${SHARED_KNOWHERE_DIR}/build/Release/libknowhere.so" ]]; then
-            KNOWHERE_DIR="${SHARED_KNOWHERE_DIR}"
-            echo "[INFO] Reusing shared Knowhere build: ${KNOWHERE_DIR}"
-        fi
-        export KNOWHERE_INCLUDE_DIR="${KNOWHERE_INCLUDE_DIR:-${KNOWHERE_DIR}/include}"
-        export KNOWHERE_LIBRARY="${KNOWHERE_LIBRARY:-${KNOWHERE_DIR}/build/Release/libknowhere.so}"
-    fi
-
-    # export UNG_BUILD_DIR="/home/fengxiaoyao/FilterVector/build_para/ung"
-    # export ACORN_BUILD_DIR="/home/fengxiaoyao/FilterVector/build_para/acorn"
-    # export NAVIX_BUILD_DIR="/home/fengxiaoyao/FilterVector/build_para/navix"
-
-    
     # --- Middle loop: iterate over query tasks ---
     while read -r task; do
         QUERY_DIR_NAME=$(echo "$task" | jq -r '.query_dir_name')
 
         # --- Load and override task-specific parameters ---
-        ACORN_EFS_START=$(echo "$task" | jq -r '.acorn_search_params.acorn_efs_start')
-        ACORN_EFS_STEP_SLOW=$(echo "$task" | jq -r '.acorn_search_params.acorn_efs_step_slow')
-        ACORN_EFS_STEP_FAST=$(echo "$task" | jq -r '.acorn_search_params.acorn_efs_step_fast')
+        EFS_START=$(echo "$task" | jq -r '.alps_search_params.efs_start')
+        EFS_STEP_SLOW=$(echo "$task" | jq -r '.alps_search_params.efs_step_slow')
+        EFS_STEP_FAST=$(echo "$task" | jq -r '.alps_search_params.efs_step_fast')
         TASK_SELECTOR_MODEL_PATH=$(echo "$task" | jq -r '.selector_model_path // ""')
         TASK_ROUTER_ZERO_ALGORITHM=$(echo "$task" | jq -r '.router_zero_algorithm // ""')
         TASK_RESULT_NAME_SUFFIX=$(echo "$task" | jq -r '.result_name_suffix // ""')
@@ -144,9 +127,9 @@ while read -r dataset_config; do
             EFFECTIVE_ALGO_CHOICE_CSV="$TASK_ALGO_CHOICE_CSV"
         fi
 
-        # Fail fast if the required task parameter is missing.
-        if [[ "$ACORN_EFS_START" == "null" || -z "$ACORN_EFS_START" ]]; then
-            echo "错误: 任务 '$QUERY_DIR_NAME' 缺少 'acorn_efs_start' 参数！"
+        # Fail fast if the ef sweep required by ALPS' FAVOR-HNSW path is missing.
+        if [[ "$EFS_START" == "null" || -z "$EFS_START" ]]; then
+            echo "错误: 任务 '$QUERY_DIR_NAME' 缺少 'alps_search_params.efs_start' 参数！"
             exit 1
         fi
 
@@ -155,27 +138,14 @@ while read -r dataset_config; do
             
             echo -e "\n=========================================================="
             echo "Processing: Dataset=[$DATASET], Query=[$QUERY_DIR_NAME], Algorithm=[$ALGORITHM_NAME]"
-            echo "Using ACORN search params: efs_start=${ACORN_EFS_START}, efs_step_slow=${ACORN_EFS_STEP_SLOW}, efs_step_fast=${ACORN_EFS_STEP_FAST}"
+            echo "Using ALPS ef sweep: start=${EFS_START}, slow_step=${EFS_STEP_SLOW}, fast_step=${EFS_STEP_FAST}"
             echo "=========================================================="
 
             # Map the algorithm name to its runtime parameters.
             case "$ALGORITHM_NAME" in
-                "UNG-nTfalse")    ROUTING_MODE=0; BASELINE_ALG=0 ; IS_REC_MORE_START=false;;
-                "ACORN-gamma")    ROUTING_MODE=0; BASELINE_ALG=2 ; IS_REC_MORE_START=false;;
-                "NaviX-ACORN")    ROUTING_MODE=0; BASELINE_ALG=4 ; IS_REC_MORE_START=false;;
-                "pre-filter")     ROUTING_MODE=0; BASELINE_ALG=5 ; IS_REC_MORE_START=false;;
-                "ACORN-1")        ROUTING_MODE=0; BASELINE_ALG=6 ; IS_REC_MORE_START=false;;
-                "UNG+")           ROUTING_MODE=0; BASELINE_ALG=8 ; IS_REC_MORE_START=false;;
-                "UNG++")          ROUTING_MODE=0; BASELINE_ALG=14; IS_REC_MORE_START=false;;
                 "TFNG") ROUTING_MODE=0; BASELINE_ALG=15; IS_REC_MORE_START=false;;
-                "Milvus-IVF")     ROUTING_MODE=0; BASELINE_ALG=9 ; IS_REC_MORE_START=false;;
-                "Milvus-HNSW")    ROUTING_MODE=0; BASELINE_ALG=10; IS_REC_MORE_START=false;;
-                "FAVOR")          ROUTING_MODE=0; BASELINE_ALG=11; IS_REC_MORE_START=false;;
-                "FAVOR-HNSW")     ROUTING_MODE=0; BASELINE_ALG=12; IS_REC_MORE_START=false;;
-                "Curator")        ROUTING_MODE=0; BASELINE_ALG=13; IS_REC_MORE_START=false;;
                 "ALPS")     ROUTING_MODE=1; BASELINE_ALG=-1 ; IS_REC_MORE_START=true;;
                 "ALPS+")    ROUTING_MODE=5; BASELINE_ALG=-1 ; IS_REC_MORE_START=true;;
-                "ALPS-fixed") ROUTING_MODE=8; BASELINE_ALG=-1 ; IS_REC_MORE_START=true;;
                 *)
                     echo "错误: 未知的算法名称 '$ALGORITHM_NAME'。请在 exp.sh 的 case 语句中定义它。"
                     exit 1;;
@@ -183,19 +153,8 @@ while read -r dataset_config; do
 
             # Follow the JSON config by default, with targeted overrides when needed.
             UNG_DISTANCE_MODE="$UNG_DISTANCE_MODE_DEFAULT"
-            if [[ "$ALGORITHM_NAME" == "SmartRoute++" || "$ALGORITHM_NAME" == "SmartRoute+++" ]]; then
-                UNG_DISTANCE_MODE="rabitq"
-            fi
-
-            # Use the JSON-configured RabitQ side-index setting by default.
+            # Use the JSON-configured RabitQ side-index setting.
             EFFECTIVE_BUILD_RABITQ_SIDE_INDEX="$BUILD_RABITQ_SIDE_INDEX"
-            # SmartRoute++ and SmartRoute+++ always require a RabitQ side index.
-            if [[ "$ALGORITHM_NAME" == "SmartRoute++" || "$ALGORITHM_NAME" == "SmartRoute+++" ]]; then
-                if [[ "$BUILD_RABITQ_SIDE_INDEX" != "true" ]]; then
-                    echo "[WARN] 算法 '$ALGORITHM_NAME' 强制使用 rabitq，已自动将 build_rabitq_side_index 从 '$BUILD_RABITQ_SIDE_INDEX' 切换为 true。"
-                fi
-                EFFECTIVE_BUILD_RABITQ_SIDE_INDEX="true"
-            fi
             
             SHARED_DATASET_DIR="${BASE_OUTPUT_DIR}/${DATASET}"
             RESULT_ALGORITHM_NAME="${ALGORITHM_NAME}"
@@ -211,7 +170,7 @@ while read -r dataset_config; do
             # `skip` mode bypasses the build entirely and goes straight to query.
             if [[ "$BUILD_MODE" == "skip" ]]; then
                 echo "[INFO] Build mode is 'skip'. Skipping index build. Proceeding directly to ground truth + search."
-            elif [[ "$BUILD_MODE" == "parallel" || "$BUILD_MODE" == "acorn_only" || "$BUILD_MODE" == "navix_only" || "$BUILD_MODE" == "ung_only" || "$BUILD_MODE" == "favor_only" ]]; then
+            elif [[ "$BUILD_MODE" == "parallel" || "$BUILD_MODE" == "ung_only" || "$BUILD_MODE" == "favor_only" ]]; then
                 if [[ "$BUILD_ONLY_INDEX_PREPARED" == true ]]; then
                     echo "Preparing build index..."
                     echo "[INFO] Build-only mode: index already prepared for dataset '$DATASET' in this run. Skipping duplicate rebuild."
@@ -223,7 +182,6 @@ while read -r dataset_config; do
                        --dataset "$DATASET" --data_dir "$DATA_DIR" --exp_output_dir "$SHARED_DATASET_DIR" \
                        --max_degree "$MAX_DEGREE" --Lbuild "$LBUILD" --alpha "$ALPHA" \
                        --num_cross_edges "$NUM_CROSS_EDGES" --num_entry_points "$NUM_ENTRY_POINTS" \
-                       --acorn_n "$ACORN_N" --acorn_m "$ACORN_M" --acorn_m_beta "$ACORN_M_BETA" --acorn_gamma "$ACORN_GAMMA" \
                        --build_rabitq_side_index "$EFFECTIVE_BUILD_RABITQ_SIDE_INDEX" \
                        --rabitq_total_bits "$RABITQ_TOTAL_BITS"
                     BUILD_ONLY_INDEX_PREPARED=true
@@ -236,13 +194,12 @@ while read -r dataset_config; do
                    --dataset "$DATASET" --data_dir "$DATA_DIR" --exp_output_dir "$SHARED_DATASET_DIR" \
                    --max_degree "$MAX_DEGREE" --Lbuild "$LBUILD" --alpha "$ALPHA" \
                    --num_cross_edges "$NUM_CROSS_EDGES" --num_entry_points "$NUM_ENTRY_POINTS" \
-                   --acorn_n "$ACORN_N" --acorn_m "$ACORN_M" --acorn_m_beta "$ACORN_M_BETA" --acorn_gamma "$ACORN_GAMMA" \
                    --build_rabitq_side_index "$EFFECTIVE_BUILD_RABITQ_SIDE_INDEX" \
                    --rabitq_total_bits "$RABITQ_TOTAL_BITS"
             fi
             
             # Some build modes are build-only and should skip GT generation and search.
-            if [[ "$BUILD_MODE" == "parallel" || "$BUILD_MODE" == "acorn_only" || "$BUILD_MODE" == "navix_only" || "$BUILD_MODE" == "ung_only" || "$BUILD_MODE" == "favor_only" || "$BUILD_MODE" == "compile" ]]; then
+            if [[ "$BUILD_MODE" == "parallel" || "$BUILD_MODE" == "ung_only" || "$BUILD_MODE" == "favor_only" || "$BUILD_MODE" == "compile" ]]; then
                echo "[INFO] Skipping GT generation and search steps."
                echo "--- The current experimental configuration processing has been completed (BUILD ONLY) ---"
                continue
@@ -256,7 +213,7 @@ while read -r dataset_config; do
                --K "$K"
 
             # --- Call search.sh ---
-            INDEX_DIR_NAME="M${MAX_DEGREE}_LB${LBUILD}_alpha${ALPHA}_C${NUM_CROSS_EDGES}_EP${NUM_ENTRY_POINTS}_AN${ACORN_N}_AM${ACORN_M}_AMB${ACORN_M_BETA}_AG${ACORN_GAMMA}"
+            INDEX_DIR_NAME="M${MAX_DEGREE}_LB${LBUILD}_alpha${ALPHA}_C${NUM_CROSS_EDGES}_EP${NUM_ENTRY_POINTS}"
             if [[ "$EFFECTIVE_BUILD_RABITQ_SIDE_INDEX" == "true" ]]; then
                INDEX_DIR_NAME="${INDEX_DIR_NAME}_RQB${RABITQ_TOTAL_BITS}"
             fi
@@ -302,14 +259,15 @@ while read -r dataset_config; do
                --routing_mode "$ROUTING_MODE" \
                --baseline_alg "$BASELINE_ALG" \
                --ung_distance_mode "$UNG_DISTANCE_MODE" \
-               --efs_start "$ACORN_EFS_START" \
-               --efs_step_slow "$ACORN_EFS_STEP_SLOW" --efs_step_fast "$ACORN_EFS_STEP_FAST" --lsearch_threshold "$LSEARCH_THRESHOLD" \
+               --efs_start "$EFS_START" \
+               --efs_step_slow "$EFS_STEP_SLOW" --efs_step_fast "$EFS_STEP_FAST" --lsearch_threshold "$LSEARCH_THRESHOLD" \
                --optimize_standalone_prefilter "$OPTIMIZE_STANDALONE_PREFILTER" \
                --algo_choice_csv "$EFFECTIVE_ALGO_CHOICE_CSV"
                     
             echo "--- Finished: Dataset=[$DATASET], Query=[$QUERY_DIR_NAME], Algorithm=[$ALGORITHM_NAME] ---"
         done < <(echo "$task" | jq -r --arg selected "${ALPS_ALGORITHMS:-}" '
             .algorithms[]
+            | select(. == "ALPS" or . == "ALPS+" or . == "TFNG")
             | select(
                 $selected == ""
                 or (. as $algorithm | ($selected | split(",") | index($algorithm)) != null)

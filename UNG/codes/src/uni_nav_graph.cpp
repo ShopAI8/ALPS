@@ -194,20 +194,15 @@ namespace ANNS
 
       int map_router_algo_label_to_baseline_id(const std::string& raw_label) {
          const std::string label = trim_copy(raw_label);
-         if (label == "ACORN-gamma") return 2;
-         if (label == "ACORN-gamma-improved") return 3;
-         if (label == "ACORN-1") return 6;
-         // SODA's "NaviX" family is expected to route into the
-         // NaviX-ACORN baseline, which runs on the ACORN index.
-         if (label == "NaviX" || label == "NaviX-ACORN") return 4;
-         if (label == "FAVOR") return 11;
-         if (label == "FAVOR-HNSW") return 12;
-         if (label == "UNG+") return 8;
-         // The wide-table selector uses the label UNG++ for the sorted-LNG
-         // implementation (baseline id 15).
+         // ALPS was evaluated with the ef-aligned FAVOR-HNSW route.  Keep the
+         // historical model label "FAVOR" compatible with that route; the
+         // adaptive FAVOR implementation remains available only through an
+         // explicit label/choice so it cannot silently lower recall.
+         if (label == "FAVOR" || label == "FAVOR-HNSW") return 12;
+         if (label == "FAVOR-adaptive") return 11;
          if (label == "UNG++" || label == "UNG++-sorted-lng") return 15;
+         if (label == "TFNG") return 15;
          if (label == "pre-filter") return 5;
-         if (label == "Curator") return 13;
          return -1;
       }
 
@@ -241,7 +236,7 @@ namespace ANNS
                return mapped_id;
             }
 
-            std::cerr << "[SODA] Unsupported class_labels entry for class 0: "
+            std::cerr << "[ALPS] Unsupported class_labels entry for class 0: "
                       << label << std::endl;
             return std::nullopt;
          }
@@ -265,7 +260,7 @@ namespace ANNS
             return mapped_id;
          }
 
-         std::cerr << "[SODA] Unsupported ROUTER_ZERO_ALGORITHM override: "
+         std::cerr << "[ALPS] Unsupported ROUTER_ZERO_ALGORITHM override: "
                    << label << std::endl;
          return std::nullopt;
       }
@@ -516,15 +511,42 @@ namespace ANNS
 
       class FavorContainmentFilter final {
          public:
-            FavorContainmentFilter(ANNS::IStorage* base_storage,
+            FavorContainmentFilter(const favor::FAVOR<float>* favor_index,
+                                   ANNS::IStorage* base_storage,
+                                   const std::vector<ANNS::IdxType>& old_to_new_vec_ids,
                                    const std::vector<ANNS::LabelType>& query_labels)
-               : base_storage_(base_storage), query_labels_(query_labels) {}
+               : favor_index_(favor_index),
+                 base_storage_(base_storage),
+                 old_to_new_vec_ids_(old_to_new_vec_ids),
+                 query_labels_(query_labels) {}
 
             bool check(size_t internal_id) const {
-               const auto& base_labels = base_storage_->get_label_set(static_cast<ANNS::IdxType>(internal_id));
                if (query_labels_.empty()) {
                   return true;
                }
+
+               // FAVOR passes its HNSW-internal ID to the generic filter.  The
+               // index is built in parallel, so that ID is not stable and is
+               // neither the original dataset ID nor UNG's reordered ID.
+               // Resolve the external/original label first, then translate it
+               // into the reordered ID used by _base_storage.
+               if (favor_index_ == nullptr || base_storage_ == nullptr ||
+                   internal_id >= favor_index_->cur_element_count.load()) {
+                  return false;
+               }
+
+               const auto original_id = favor_index_->getExternalLabel(
+                   static_cast<hnswlib::tableint>(internal_id));
+               if (original_id >= old_to_new_vec_ids_.size()) {
+                  return false;
+               }
+
+               const auto reordered_id = old_to_new_vec_ids_[original_id];
+               if (reordered_id >= base_storage_->get_num_points()) {
+                  return false;
+               }
+
+               const auto& base_labels = base_storage_->get_label_set(reordered_id);
                if (base_labels.size() < query_labels_.size()) {
                   return false;
                }
@@ -543,10 +565,13 @@ namespace ANNS
             }
 
          private:
+            const favor::FAVOR<float>* favor_index_;
             ANNS::IStorage* base_storage_;
+            const std::vector<ANNS::IdxType>& old_to_new_vec_ids_;
             const std::vector<ANNS::LabelType>& query_labels_;
       };
 
+#if 0  // Legacy ACORN baseline has been detached from the ALPS build.
       class ACORNRabitQDistanceBackend final : public faiss::ACORNDistanceBackend
       {
          public:
@@ -784,6 +809,7 @@ namespace ANNS
             size_t full_keep_ = 256;
             static constexpr uint64_t kSamplePeriod = 32;
       };
+#endif
    } // namespace
 
 
@@ -819,9 +845,7 @@ namespace ANNS
       if (lowered == "rabitq")
       {
          _ung_distance_mode = UngDistanceMode::RabitQ;
-         if (!_rabitq_side_index.enabled() &&
-             !_acorn_rabitq_side_index.enabled() &&
-             !_acorn_1_rabitq_side_index.enabled())
+         if (!_rabitq_side_index.enabled())
          {
             std::cerr << "[RabitQ] Distance mode is set to rabitq, but side index is not available. "
                       << "UNG will fallback to exact distance at query time." << std::endl;
@@ -2462,6 +2486,7 @@ namespace ANNS
       }
    }
 
+#if 0  // Legacy Milvus/Knowhere baseline has been detached from the ALPS build.
    bool UniNavGraph::run_milvus_knowhere_baseline(
       IdxType query_id,
       const char* query,
@@ -2615,6 +2640,8 @@ namespace ANNS
 #endif
    }
 
+#endif
+
    bool UniNavGraph::run_favor_baseline(
       IdxType query_id,
       const char* query,
@@ -2636,7 +2663,8 @@ namespace ANNS
       stats.query_length = query_labels.size();
       stats.acorn_filter_type = 4;
 
-      FavorContainmentFilter filter(_base_storage.get(), query_labels);
+      FavorContainmentFilter filter(
+          _favor_index.get(), _base_storage.get(), _old_to_new_vec_ids, query_labels);
 
       roaring::Roaring valid_candidates;
       bool allow_all = query_labels.empty();
@@ -2726,7 +2754,8 @@ namespace ANNS
       stats.query_length = query_labels.size();
       stats.acorn_filter_type = 4;
 
-      FavorContainmentFilter filter(_base_storage.get(), query_labels);
+      FavorContainmentFilter filter(
+          _favor_index.get(), _base_storage.get(), _old_to_new_vec_ids, query_labels);
 
       roaring::Roaring valid_candidates;
       bool allow_all = query_labels.empty();
@@ -4755,21 +4784,10 @@ void UniNavGraph::calculate_query_features_only(
 
       // --- 模式 0: Baseline ---
       if (routing_mode == 0) {
-         if (baseline_alg == 0 || baseline_alg == 1 || baseline_alg == 8 || baseline_alg == 14 || baseline_alg == 15) {
-               bool use_nT_true = (baseline_alg == 1);
-               stats.is_trie_recursive = use_nT_true; // 记录: Baseline使用的是递归还是非递归
-
+         if (baseline_alg == 15) {
+               stats.is_trie_recursive = false;
                auto els_start = std::chrono::high_resolution_clock::now();
-               if (baseline_alg == 15) {
-                  get_min_super_sets_sorted_lng(query_labels, entry_group_ids, stats);
-               } else if (baseline_alg == 14 && !query_labels.empty()) {
-                  // UNG++: bitmap-driven exact ELS（对拍已验证与 trie 版结果一致，无 trie 遍历）
-                  get_min_super_sets_bitmap(query_labels, entry_group_ids);
-               } else {
-                  static std::atomic<int> counter{0};
-                  // 注意这里传入 use_nT_true，直接覆盖全局的 is_new_trie_method
-                  get_min_super_sets_debug(query_labels, entry_group_ids, false, true, counter, use_nT_true, is_rec_more_start, stats, false);
-               }
+               get_min_super_sets_sorted_lng(query_labels, entry_group_ids, stats);
                stats.get_min_super_sets_time_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - els_start).count();
                stats.num_entry_points = entry_group_ids.size();
          }
@@ -4777,7 +4795,7 @@ void UniNavGraph::calculate_query_features_only(
       }
 
       // --- 模式 1: SODA ---
-      if (routing_mode == 1 || routing_mode == 6) {
+      if (routing_mode == 1) {
          // 1. 新增：计算 Fpass (NumDescendants) 用于模型推理
          auto start_fpass = std::chrono::high_resolution_clock::now();
          size_t num_descendants = 0;
@@ -5029,7 +5047,7 @@ void UniNavGraph::calculate_query_features_only(
                                    bool is_ung_more_entry,
                                    int lsearch_start, int lsearch_step,
                                    int efs_start, int efs_step_slow,int efs_step_fast,int lsearch_threshold,
-                                   int routing_mode, int baseline_alg, IdxType num_queries, faiss_navix::IndexHNSWFlat* navix_index,
+                                   int routing_mode, int baseline_alg, IdxType num_queries,
                                     const std::vector<IdxType> &true_query_group_ids,const std::vector<int> &query_algo_choices,
                                     bool optimize_standalone_prefilter)
    {
@@ -5063,22 +5081,15 @@ void UniNavGraph::calculate_query_features_only(
       int final_algo_choice = -1;
 
       // -----------------------------------------------------------------------
-      // 路径 A: SODA+ / SmartRoute+++ (Mode 5 / 7, global choices are precomputed)
+      // Path A: ALPS+ global choices are precomputed.
       // -----------------------------------------------------------------------
-      if (routing_mode == 5 || routing_mode == 7) {
+      if (routing_mode == 5) {
             final_algo_choice = query_algo_choices[id]; // 此时传进来的已经是全局算好的 choice
             stats.algo_choice = final_algo_choice;
 
             auto prep_start = std::chrono::high_resolution_clock::now();
-            if (final_algo_choice == 0 || final_algo_choice == 1 || final_algo_choice == 8 || final_algo_choice == 14 || final_algo_choice == 15) {
-               if (final_algo_choice == 15) {
-                  get_min_super_sets_sorted_lng(query_labels, entry_group_ids, stats);
-               } else if (final_algo_choice == 14 && !query_labels.empty()) {
-                  get_min_super_sets_bitmap(query_labels, entry_group_ids);
-               } else {
-                  static std::atomic<int> counter{0};
-                  get_min_super_sets_debug(query_labels, entry_group_ids, false, true, counter, (final_algo_choice == 1), is_rec_more_start, stats, false);
-               }
+            if (final_algo_choice == 15) {
+               get_min_super_sets_sorted_lng(query_labels, entry_group_ids, stats);
             } else if (final_algo_choice == 5) {
                if (query_labels.empty()) {
                      roar_res.addRange(0, _num_points);
@@ -5258,7 +5269,7 @@ void UniNavGraph::calculate_query_features_only(
          // ======================= STAGE 2: EXECUTION STAGE =======================
          
          // Apply entry point expansion logic if needed for the UNG path
-         if (is_ung_more_entry && (final_algo_choice == 0 || final_algo_choice == 1 || final_algo_choice == 8 || final_algo_choice == 14 || final_algo_choice == 15))
+         if (is_ung_more_entry && final_algo_choice == 15)
          {
             IdxType true_group_id = 0;
             if (id < true_query_group_ids.size())
@@ -5349,6 +5360,7 @@ void UniNavGraph::calculate_query_features_only(
              search_cache_list.release_cache(search_cache);
              return; 
          }
+#if 0  // Legacy NaviX and Milvus execution branches are not part of ALPS.
          else if (final_algo_choice == 7) // NaviX(先不看，在NaviX索引)
          {
              auto search_time_start_ms = std::chrono::high_resolution_clock::now();
@@ -5445,7 +5457,8 @@ void UniNavGraph::calculate_query_features_only(
                return;
             }
          }
-         else if (final_algo_choice == 11) // FAVOR baseline adapted to containment labels
+#endif
+         else if (final_algo_choice == 11) // FAVOR path used by ALPS
          {
             if (!run_favor_baseline(
                     id, query, query_labels, Lsearch, K, cur_result, stats, num_cmps[id])) {
@@ -5455,7 +5468,7 @@ void UniNavGraph::calculate_query_features_only(
                return;
             }
          }
-         else if (final_algo_choice == 12) // FAVOR-HNSW baseline adapted to containment labels
+         else if (final_algo_choice == 12) // FAVOR-HNSW path used by ALPS
          {
             const int current_efs = compute_aligned_efs(
                 Lsearch, lsearch_start, lsearch_step, efs_start,
@@ -5468,6 +5481,7 @@ void UniNavGraph::calculate_query_features_only(
                return;
             }
          }
+#if 0  // Legacy Curator and ACORN execution branches are not part of ALPS.
          else if (final_algo_choice == 13) // Curator
          {
             if (!_curator_ctx.ready) {
@@ -5679,7 +5693,8 @@ void UniNavGraph::calculate_query_features_only(
             }
             stats.search_time_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - search_time_start_ms).count();
          }
-         else if (final_algo_choice == 0 || final_algo_choice == 1 || final_algo_choice == 8 || final_algo_choice == 14 || final_algo_choice == 15)
+#endif
+         else if (final_algo_choice == 15)
          {
             // --- Execute UNG Search ---
             auto search_time_start_ms = std::chrono::high_resolution_clock::now();
@@ -5737,17 +5752,20 @@ void UniNavGraph::calculate_query_features_only(
          }
 
          // ======================= STAGE 3: FINALIZE RESULTS =======================
-         // Curator and FAVOR write results directly — skip ID remapping
-         if (final_algo_choice != 13 && final_algo_choice != 11 && final_algo_choice != 12) {
+         // FAVOR indexes use original IDs; UNG/TFNG indexes use reordered IDs.
          for (auto k = 0; k < K; ++k)
          {
             if (k < cur_result.size())
             {
-               // cur_result[k].id 无论来源是ACORN还是UNG，都统一是 "新ID".在这里一次性、正确地转换为 "原始ID"
-               const auto result_new_id = cur_result[k].id;
-               if (static_cast<size_t>(result_new_id) < _new_to_old_vec_ids.size())
+               const auto result_id = cur_result[k].id;
+               if (final_algo_choice == 11 || final_algo_choice == 12)
                {
-                  results[id * K + k].first = _new_to_old_vec_ids[result_new_id];
+                  results[id * K + k].first = result_id;
+                  results[id * K + k].second = cur_result[k].distance;
+               }
+               else if (static_cast<size_t>(result_id) < _new_to_old_vec_ids.size())
+               {
+                  results[id * K + k].first = _new_to_old_vec_ids[result_id];
                   results[id * K + k].second = cur_result[k].distance;
                }
                else
@@ -5760,10 +5778,9 @@ void UniNavGraph::calculate_query_features_only(
                results[id * K + k].first = -1;
             }
          }
-         }
 
       double pure_search_time = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - total_search_start_time).count();
-      if (routing_mode == 5 || routing_mode == 7) {
+      if (routing_mode == 5) {
             stats.time_ms = pure_search_time + stats.mask_gen_time_ms + stats.route_pred_time_ms + stats.global_sort_time_ms;
       } else {
             stats.time_ms = pure_search_time;
@@ -5783,7 +5800,7 @@ void UniNavGraph::calculate_query_features_only(
                                    bool is_ung_more_entry,
                                    int lsearch_start, int lsearch_step,
                                    int efs_start, int efs_step_slow,int efs_step_fast,int lsearch_threshold, 
-                                 int routing_mode,int baseline_alg, faiss_navix::IndexHNSWFlat* navix_index, 
+                                 int routing_mode,int baseline_alg,
                                  const std::vector<IdxType> &true_query_group_ids,
                                  const std::vector<int>& query_algo_choices,
                                  std::queue<int> task_queue,bool optimize_standalone_prefilter)
@@ -5817,11 +5834,11 @@ void UniNavGraph::calculate_query_features_only(
                _thread_pool->enqueue([this, target_id, &global_search_cache_list, &query_storage, &distance_handler, &num_threads, &Lsearch, &num_entry_points, &scenario, &K, results, &num_cmps, &query_stats,
                                  &is_new_trie_method, &is_rec_more_start, &is_ung_more_entry, &lsearch_start, &lsearch_step,
                                  &efs_start, &efs_step_slow, &efs_step_fast, &lsearch_threshold,
-                                 &routing_mode, &baseline_alg, &num_queries, &navix_index, &true_query_group_ids, &query_algo_choices,&optimize_standalone_prefilter] { 
+                                 &routing_mode, &baseline_alg, &num_queries, &true_query_group_ids, &query_algo_choices,&optimize_standalone_prefilter] {
                   this->thread_function(target_id, global_search_cache_list, query_storage, distance_handler, num_threads, Lsearch, num_entry_points, scenario, K, results, num_cmps, query_stats,
                                  is_new_trie_method, is_rec_more_start, is_ung_more_entry, lsearch_start, lsearch_step,
                                  efs_start, efs_step_slow, efs_step_fast, lsearch_threshold,
-                                 routing_mode, baseline_alg, num_queries, navix_index, true_query_group_ids, query_algo_choices,optimize_standalone_prefilter);
+                                 routing_mode, baseline_alg, num_queries, true_query_group_ids, query_algo_choices,optimize_standalone_prefilter);
                   return 1;
                 }));   
       }
@@ -5840,9 +5857,16 @@ void UniNavGraph::calculate_query_features_only(
       std::vector<int> final_choices = csv_choices;
       if (final_choices.size() < num_queries) final_choices.resize(num_queries, -1);
 
-      if (routing_mode != 5 && routing_mode != 7) return final_choices;
+      if (routing_mode != 5) return final_choices;
 
-      std::cout << "\n[SODA" << (routing_mode == 7 ? "+++" : "+") << "] Starting Global Prediction Phase..." << std::endl;
+      for (auto& choice : final_choices) {
+         if (choice != -1 && choice != 5 && choice != 11 && choice != 12 && choice != 15) {
+            std::cerr << "[ALPS+] Ignoring unsupported per-query algorithm id: " << choice << std::endl;
+            choice = -1;
+         }
+      }
+
+      std::cout << "\n[ALPS+] Starting Global Prediction Phase..." << std::endl;
          
       std::vector<int> target_ids;
       std::vector<int> id_to_batch_idx(num_queries, -1); 
@@ -5984,30 +6008,18 @@ void UniNavGraph::calculate_query_features_only(
                   else if (router_decision == 2) final_choices[id] = 5;
                   else final_choices[id] = 15;
             }
-         } else if (_fast_route_single_selector) {
-            // SODA 模型缺失时，回退到 FastSmartRoute 单模型，避免 algo choice 保持 -1。
-            std::vector<float> batch_preds = _fast_route_single_selector->predict_batch(batch_features);
-            for (size_t i = 0; i < target_ids.size(); ++i) {
-                  int id = target_ids[i];
-                  int router_decision = std::round(batch_preds[i]);
-
-                  if (router_decision == 2) final_choices[id] = 5;
-                  else if (router_decision == 1) final_choices[id] = _single_majority_acorn_id;
-                  else final_choices[id] = 8;
-            }
-            std::cout << "[SODA+] SODA model is unavailable, fallback to FastSmartRoute selector." << std::endl;
          } else {
             for (int id : target_ids) {
-               final_choices[id] = 8;
+               final_choices[id] = 15;
             }
-            std::cout << "[SODA+] No routing selector is available, fallback all unresolved queries to UNG+ (choice=8)." << std::endl;
+            std::cout << "[ALPS+] No routing selector is available; unresolved queries use TFNG." << std::endl;
          }
       }
 
       // 保底：不允许未决策查询残留为 -1（否则后续执行阶段不会进入任何算法分支）。
       for (int id : target_ids) {
          if (final_choices[id] == -1) {
-            final_choices[id] = 8;
+            final_choices[id] = 15;
          }
       }
       double total_pred_time = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - pred_start).count();
@@ -6018,7 +6030,7 @@ void UniNavGraph::calculate_query_features_only(
          out_global_stats[id].route_pred_time_ms = avg_pred_time;
       }
 
-      std::cout << "[SODA" << (routing_mode == 7 ? "+++" : "+") << "] Global Phase completed." << std::endl;
+      std::cout << "[ALPS+] Global Phase completed." << std::endl;
       return final_choices;
    }
    
@@ -6032,7 +6044,7 @@ void UniNavGraph::calculate_query_features_only(
       std::vector<int> sorted_ids(num_queries);
       std::iota(sorted_ids.begin(), sorted_ids.end(), 0);
 
-      if (routing_mode != 5 && routing_mode != 7) return sorted_ids;
+      if (routing_mode != 5) return sorted_ids;
       
       std::vector<size_t> query_hashes(num_queries);
       #pragma omp parallel for
@@ -6629,7 +6641,6 @@ void UniNavGraph::calculate_query_features_only(
    }
 
    void UniNavGraph::load(std::string index_path_prefix, std::string selector_modle_prefix, const std::string &data_type,
-                          const std::string &acorn_index_path, const std::string &acorn_1_index_path,
                           const std::string &dataset, int routing_mode, int baseline_alg)
    {
       std::cout << "Loading index from " << index_path_prefix << " ..." << std::endl;
@@ -6772,10 +6783,7 @@ void UniNavGraph::calculate_query_features_only(
                    << ". Containment filter acceleration may be unavailable." << std::endl;
       }
 
-      const bool is_smartroute_mode =
-          (routing_mode == 1 || routing_mode == 2 || routing_mode == 3 ||
-           routing_mode == 4 || routing_mode == 5 || routing_mode == 6 ||
-           routing_mode == 7);
+      const bool is_smartroute_mode = (routing_mode == 1 || routing_mode == 5);
       std::optional<int> smart_route_target_alg_from_config = load_router_target_algo_id_from_env();
       if (!smart_route_target_alg_from_config.has_value()) {
          const auto smart_route_model_dir = resolve_smart_route_model_dir(selector_modle_prefix);
@@ -6784,13 +6792,6 @@ void UniNavGraph::calculate_query_features_only(
             smart_route_target_alg_from_config = load_router_target_algo_id_from_class_labels(class_labels_path);
          }
       }
-      const bool need_milvus_ivf_baseline = (routing_mode == 0 && baseline_alg == 9);
-      const bool need_milvus_hnsw_baseline = (routing_mode == 0 && baseline_alg == 10);
-      const bool need_acorn_baseline =
-          is_smartroute_mode ||
-          (routing_mode == 0 && (baseline_alg == 2 || baseline_alg == 3 ||
-                                 baseline_alg == 4 || baseline_alg == 6));
-
 #ifdef ENABLE_KNOWHERE_MILVUS_BASELINE
       _milvus_knowhere_ready = false;
       _milvus_knowhere_hnsw_ready = false;
@@ -7315,33 +7316,33 @@ void UniNavGraph::calculate_query_features_only(
          _trie_method_selector = nullptr;
       }
 
-      // --- 加载 SODA 模型 ---
-      _smart_route_target_alg_id = 2;
+      // Load the ALPS routing model.
+      _smart_route_target_alg_id = 11;
       const auto smart_route_model_dir = resolve_smart_route_model_dir(selector_modle_prefix);
       if (smart_route_model_dir.has_value()) {
          const std::string sr_model_path = (smart_route_model_dir.value() / "router.onnx").string();
          _smart_route_selector = std::make_unique<MethodSelector>(sr_model_path);
-         std::cout << "- SODA Model loaded from: " << sr_model_path << std::endl;
+         std::cout << "- ALPS model loaded from: " << sr_model_path << std::endl;
 
          if (const auto routed_alg_id = load_router_target_algo_id_from_env()) {
             _smart_route_target_alg_id = *routed_alg_id;
-            std::cout << "- SODA class 0 target algorithm loaded from ROUTER_ZERO_ALGORITHM: "
+            std::cout << "- ALPS class 0 target algorithm loaded from ROUTER_ZERO_ALGORITHM: "
                       << _smart_route_target_alg_id << std::endl;
          } else {
             const fs::path class_labels_path = smart_route_model_dir.value() / "class_labels.txt";
             if (const auto routed_alg_id = load_router_target_algo_id_from_class_labels(class_labels_path)) {
                _smart_route_target_alg_id = *routed_alg_id;
-               std::cout << "- SODA class 0 target algorithm loaded from class_labels.txt: "
+               std::cout << "- ALPS class 0 target algorithm loaded from class_labels.txt: "
                          << _smart_route_target_alg_id << std::endl;
             } else {
-               std::cout << "- [Warning] SODA class_labels.txt missing or unsupported at: "
+               std::cout << "- [Warning] ALPS class_labels.txt missing or unsupported at: "
                          << class_labels_path.string()
                          << ". Fallback target algorithm id: " << _smart_route_target_alg_id << std::endl;
             }
          }
       } else {
          _smart_route_selector = nullptr;
-         std::cout << "- [Warning] SODA Model not found under: " << selector_modle_prefix << std::endl;
+         std::cout << "- [Warning] ALPS model not found under: " << selector_modle_prefix << std::endl;
       }
 
       // --- 加载 FastSmartRoute 单层模型 (4特征) ---
@@ -7382,6 +7383,7 @@ void UniNavGraph::calculate_query_features_only(
          _fast_route_revised_selector = nullptr;
       }
 
+#if 0  // Legacy ACORN index loading has been detached from the ALPS build.
       // === load ACORN index ===
       // Declare a shared inverted index and a flag to track if it's loaded.
       std::unordered_map<int, std::vector<int>> shared_inverted_index;
@@ -7527,6 +7529,7 @@ void UniNavGraph::calculate_query_features_only(
          std::cerr << "Warning: ACORN-1 index file not found at: " << acorn_1_index_path << std::endl;
       }
 
+#endif
       // print
       std::cout << "- Index loaded in " << std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - start_time).count() << " ms" << std::endl;
    }
@@ -7650,6 +7653,7 @@ void UniNavGraph::calculate_query_features_only(
    // Curator build (thin wrapper, like FAVOR)
    // =========================================================================
 
+#if 0  // Legacy Curator implementation has been detached from the ALPS build.
    void UniNavGraph::configure_curator(int nlist, int nprobe, int max_leaf_size, int search_ef, int beam_size) {
        _curator_ctx.nlist = nlist;
        _curator_ctx.nprobe = nprobe;
@@ -7677,4 +7681,5 @@ void UniNavGraph::calculate_query_features_only(
            curator_build_index(_curator_ctx, _base_storage);
        }
    }
+#endif
 }

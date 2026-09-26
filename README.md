@@ -34,8 +34,9 @@ The experimental environment is as follows:
 - Python: 3.10.20
 
 The Docker image installs the Python and C++ dependencies and precompiles
-CRoaring, NaviX, UNG, ACORN, and FAVOR. Dataset files and experiment outputs
-are deliberately kept outside the image.
+CRoaring, UNG/TFNG, and FAVOR. FAVOR and pre-filtering are internal execution
+paths selected by ALPS; the experiment entry point exposes only ALPS, ALPS+,
+and TFNG. Dataset files and experiment outputs are kept outside the image.
 
 
 ### 1.2.1 Build the image
@@ -47,18 +48,9 @@ cd your_path/ALPS
 docker build --build-arg BUILD_JOBS=8 -t alps:cpu .
 ```
 
-The default image supports ALPS/UNG/TFNG, ACORN, FAVOR, NaviX, pre-filtering,
-and Curator. Building can take several minutes and needs substantial RAM.
+The image supports ALPS, ALPS+, and TFNG. ACORN, NaviX, Curator, and the two
+Milvus/Knowhere baselines are intentionally excluded from this build.
 `BUILD_JOBS` can be reduced when the host has limited memory.
-
-The two Milvus baselines additionally require the large Knowhere/Conan build:
-
-```bash
-docker build \
-  --build-arg BUILD_JOBS=8 \
-  --build-arg ENABLE_KNOWHERE=1 \
-  -t alps:cpu-knowhere .
-```
 
 ### 1.2.2 Start the container
 
@@ -85,7 +77,6 @@ python --version
 cmake --version
 python -c "import numpy, pandas, sklearn, xgboost, onnx; print('Python dependencies OK')"
 test -x /opt/alps-build/ung/apps/search_UNG_index
-test -x /opt/alps-build/acorn/demos/test_acorn
 test -x /opt/alps-build/favor/app/build_index
 echo "C++ binaries OK"
 ```
@@ -97,12 +88,9 @@ echo "C++ binaries OK"
 The main structure of the repository is as follows:
 
 ```text
-FilterVectorCode/
-├── ACORN/                  # Implementation related to ACORN
-├── NaviX/                  # Implementation related to NaviX
+ALPS/
 ├── UNG/                    # UNG / TFNG implementation and data-processing scripts
-├── knowhere/               # Dependency for the Milvus baseline
-├── FAVOR/                  # Dependency for the FAVOR baseline
+├── FAVOR/                  # Internal high-selectivity path used by ALPS
 ├── Genome_model/           # Routering model for Genome
 ├── data/                   # Dataset directory
 ├── experiment_json/        # Example experiment configurations
@@ -147,11 +135,11 @@ The following parameters in the configuration files or scripts determine the beh
 
 | Parameter | Description | Values / Notes |
 | :--- | :--- | :--- |
-| `ROUTING_MODE` | Determines the routing logic. | `0`: Baseline mode; `1`: **ALPS**; `5`: **ALPS+**. |
-| `BASELINE_ALG` | Specifies the algorithm when `ROUTING_MODE=0`. | `0`: UNG; `2`: ACORN-gamma; `4`: NaviX; `5`: Pre-Filtering; `6`: ACORN-1; `9`: Milvus-IVF; `10`: Milvus-HNSW; `11`: FAVOR; `12`: FAVOR-HNSW; `13`: Curator; `15`: TFNG. |
-| `BUILD_MODE` | Specifies the index construction mode. | `parallel`: Build all indexes in parallel; `acorn_only`: Build only the ACORN index. |
+| `ROUTING_MODE` | Determines the routing logic. | `0`: **TFNG**; `1`: **ALPS**; `5`: **ALPS+**. |
+| `BASELINE_ALG` | Selects TFNG when `ROUTING_MODE=0`. | `15`: **TFNG**. |
+| `BUILD_MODE` | Specifies the index construction mode. | `serial`, `parallel`, `all`, `ung_only`, `favor_only`, `skip`, or `compile`. |
 | `Lsearch` | Search parameter for UNG. | Similar to `efSearch` in HNSW; controls the search depth. |
-| `efs_start/step` | Search parameters for ACORN/NaviX. | Used to dynamically adjust the filtering strength during search. |
+| `efs_start/step` | FAVOR-HNSW search parameters used internally by ALPS. | Controls the internal graph-search breadth; ALPS class 0 defaults to this ef-aligned path. |
 
 ---
 
@@ -161,41 +149,3 @@ The decision model for intelligent routing is trained using Python scripts:
 
 - **Training**: Use `selector/smart_route_train.py`.
 - **Deployment**: Export the trained model to `.onnx` format and place it in the `SelectModels` directory, where it can be loaded by the C++ `MethodSelector`.
-
-The shared router uses 100% of the valid samples in the training CSVs. Router
-accuracy is not measured on those training samples. Instead, provide a second,
-independent CSV for every dataset. Each evaluation CSV must contain:
-
-- `GlobalPpass`
-- `NumDescendants`
-- `QuerySize`
-- `Target` (the correct routing algorithm name, or its class index)
-
-The evaluation files can be discovered from one root directory using the layout
-`ROOT/FAVOR/DATASET/DATASET_routing_eval.csv`:
-
-```bash
-ALPS_RESULTS_DIR=/results python selector/smart_route_train.py \
-  --configs FAVOR \
-  --eval-data-root /data/routing_eval
-```
-
-Alternatively, provide the eight files explicitly:
-
-```bash
-ALPS_RESULTS_DIR=/results python selector/smart_route_train.py \
-  --configs FAVOR \
-  --eval-files \
-    Amazon=/data/eval/Amazon.csv \
-    BookReviews=/data/eval/BookReviews.csv \
-    Genome=/data/eval/Genome.csv \
-    Music=/data/eval/Music.csv \
-    Reviews=/data/eval/Reviews.csv \
-    Tiktok=/data/eval/Tiktok.csv \
-    VariousImg=/data/eval/VariousImg.csv \
-    Laion=/data/eval/Laion.csv
-```
-
-Use `--eval-label-column COLUMN_NAME` if the correct-route column is not named
-`Target`. The generated report and `fast_all_datasets_metrics.csv` record the
-independent-query accuracy for each dataset separately.

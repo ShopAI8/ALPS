@@ -69,14 +69,6 @@ for i in "${!DATASETS[@]}"; do
     echo "----------------------------------------------------------------"
 done
 
-mkdir -p log/curator_th-K
-
-for config in experiment_json/curator_th-K/*.json; do
-    name=$(basename "$config" .json)
-    ./exp.sh "$config" \
-      > "log/curator_th-K/${name}.log" 2>&1 || exit 1
-done
-
 if [ $OVERALL_OK -eq 0 ]; then
     echo "$(date): === th-K batch finished: ALL SUCCESS. Logs in $LOG_DIR/ ==="
 else

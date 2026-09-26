@@ -4,4 +4,4 @@ set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 set(CPP_SOURCES vamana.cpp)
 add_library(Vamana ${CPP_SOURCES})
 
-target_link_libraries(Vamana ${PROJECT_NAME} Boost::filesystem ${ROARING_LIB} onnxruntime faiss ${NAVIX_LIB})
+target_link_libraries(Vamana ${PROJECT_NAME} Boost::filesystem ${ROARING_LIB} onnxruntime)

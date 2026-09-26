@@ -38,8 +38,9 @@ BASE_DIR = os.environ.get(
 )
 EDA_ROOT_DIR = os.path.join(BASE_DIR, "EDA_Plots_try")
 
-MODELS_TO_TRY = ["RandomForest", "XGBoost", "LightGBM", "DecisionTree"]
+# MODELS_TO_TRY = ["RandomForest", "XGBoost", "LightGBM", "DecisionTree"]
 # MODELS_TO_TRY = ["XGBoost"]
+DEFAULT_ROUTER_MODEL = "XGBoost"
 MIN_RECALL_THRESHOLD = 0.90
 # Per-dataset min-recall overrides. Fall back to MIN_RECALL_THRESHOLD when unset.
 DATASET_MIN_RECALL_THRESHOLDS = {
@@ -576,7 +577,7 @@ def write_summary_outputs(global_metrics, global_ablation, global_importances, c
     df_all = pd.DataFrame(global_metrics)
     cols_order = [
         "Mode", "Config", "Dataset", "Train_Datasets", "Layer",
-        "Candidate_Set", "Model", "Accuracy",
+        "Candidate_Set", "Model", "Model_Selection", "Accuracy",
         "Train_Time_ms", "Pred_Latency_us", "Train_Size", "Test_Size",
         "Evaluation_Size", "Evaluation_Scope", "Evaluation_CSV",
         "Unknown_Count", "Unknown_Rate", "Total_Samples"
@@ -1142,7 +1143,8 @@ def train_shared_multi_dataset_generalization_for_candidates(
     route_scope_name,
     evaluation_root=None,
     evaluation_files=None,
-    evaluation_label_column="Target"
+    evaluation_label_column="Target",
+    model_type=DEFAULT_ROUTER_MODEL
 ):
     """Train on all training samples, then evaluate only on independent queries."""
     if not dataset_names:
@@ -1189,6 +1191,28 @@ def train_shared_multi_dataset_generalization_for_candidates(
         print(f"❌ {route_scope_name} 聚合后的训练标签只有一个类别，无法训练。")
         return [], [], []
 
+    if model_type not in MODELS_TO_TRY:
+        print(f"❌ 预先指定的模型 {model_type} 不在支持列表中: {MODELS_TO_TRY}")
+        return [], [], []
+
+    # The model type is fixed and the model is fully fitted before any external
+    # evaluation labels are loaded. External accuracy cannot affect selection.
+    print(f"\n[预先固定路由模型: {model_type} | 外部评测不参与模型选择]")
+    try:
+        fit_result = fit_routing_model(
+            X_train,
+            y_train,
+            target_map,
+            model_type,
+            use_smote=USE_SMOTE
+        )
+    except ImportError:
+        print(f"❌ 缺少预先指定模型 {model_type} 的引擎依赖库。")
+        return [], [], []
+    except Exception as exc:
+        print(f"❌ 预先指定模型 {model_type} 训练失败: {exc}")
+        return [], [], []
+
     external_evaluation_sets = {}
     eval_feature_frames = []
     eval_target_frames = []
@@ -1224,47 +1248,16 @@ def train_shared_multi_dataset_generalization_for_candidates(
         f"另一批独立查询用于准确率评估]"
     )
 
-    selection_cache = {}
-    selection_metrics = []
-    for model_type in MODELS_TO_TRY:
-        try:
-            fit_result = fit_routing_model(
-                X_train,
-                y_train,
-                target_map,
-                model_type,
-                use_smote=USE_SMOTE
-            )
-            evaluation = evaluate_trained_model(
-                X_eval_all,
-                y_eval_all,
-                target_map,
-                fit_result["classifier"],
-                fit_result["real_classes"]
-            )
-            result = {**fit_result, **evaluation}
-            selection_cache[model_type] = result
-            selection_metrics.append({
-                "Model": model_type,
-                "Accuracy": result["acc"],
-                "Train_Time_ms": result["train_time_ms"],
-                "Pred_Latency_us": result["pred_latency_us"],
-                "Train_Size": len(X_train),
-                "Evaluation_Size": result["test_size"],
-                "Evaluation_Scope": "IndependentQueries"
-            })
-            print(f"  > {model_type:<15} | 独立查询合并准确率: {result['acc']:.4%}")
-        except ImportError:
-            print(f"  > ⚠️ 缺少 {model_type} 引擎依赖库。")
-        except Exception as exc:
-            print(f"  > ⚠️ {model_type} 训练失败: {exc}")
+    combined_evaluation = evaluate_trained_model(
+        X_eval_all,
+        y_eval_all,
+        target_map,
+        fit_result["classifier"],
+        fit_result["real_classes"]
+    )
+    result = {**fit_result, **combined_evaluation}
+    print(f"  > {model_type:<15} | 独立查询合并准确率: {result['acc']:.4%}")
 
-    if not selection_metrics:
-        print(f"❌ {route_scope_name} 没有成功训练出的模型，跳过。")
-        return [], [], []
-
-    best_model = max(selection_metrics, key=lambda item: item["Accuracy"])["Model"]
-    result = selection_cache[best_model]
     candidate_set_name = " vs ".join(algo_list)
     dataset_evaluations = {}
 
@@ -1286,7 +1279,7 @@ def train_shared_multi_dataset_generalization_for_candidates(
     os.makedirs(output_dir, exist_ok=True)
     save_onnx_model(
         result["classifier"],
-        best_model,
+        model_type,
         X_train.shape[1],
         output_dir,
         "router.onnx",
@@ -1302,7 +1295,8 @@ def train_shared_multi_dataset_generalization_for_candidates(
         report.write(f"配置: {config_name}\n")
         report.write(f"数据集: {', '.join(dataset_names)}\n")
         report.write(f"候选算法: {candidate_set_name}\n")
-        report.write(f"选定模型: {best_model}\n")
+        report.write(f"预先固定模型: {model_type}\n")
+        report.write("模型选择: 在读取独立评测集之前由命令行/默认配置确定\n")
         report.write("切分方式: 不切分，每个数据集 100% 有效样本用于训练\n")
         report.write("评估方式: 仅使用外部提供的另一批带正确路由标签的查询\n")
         report.write("注意: 不计算、不记录训练集拟合准确率\n\n")
@@ -1320,10 +1314,6 @@ def train_shared_multi_dataset_generalization_for_candidates(
         report.write(f"独立评测集总样本数: {len(X_eval_all)}\n")
         report.write(f"独立评测集合并准确率: {result['acc']:.4%}\n")
         report.write(f"八个数据集独立评测准确率宏平均: {macro_accuracy:.4%}\n\n")
-
-        report.write("【候选模型的独立评测结果】\n")
-        report.write("-" * 80 + "\n")
-        report.write(generate_comparison_table(selection_metrics, route_scope_name, X_train.shape[1]) + "\n")
 
         report.write("【各数据集独立查询评测结果】\n")
         report.write("-" * 80 + "\n")
@@ -1357,12 +1347,13 @@ def train_shared_multi_dataset_generalization_for_candidates(
             "Unknown_Rate": evaluation_set["ignored_count"] / evaluation_set["total_count"],
             "Total_Samples": evaluation_set["total_count"],
             "Evaluation_Scope": "IndependentQueries",
-            "Evaluation_CSV": evaluation_set["csv_path"]
+            "Evaluation_CSV": evaluation_set["csv_path"],
+            "Model_Selection": "PreFixedBeforeEvaluation"
         }
         dataset_metrics.append({
             **common_fields,
             "Layer": route_scope_name,
-            "Model": best_model,
+            "Model": model_type,
             "Accuracy": evaluation["acc"],
             "Train_Time_ms": result["train_time_ms"],
             "Pred_Latency_us": evaluation["pred_latency_us"],
@@ -1379,7 +1370,7 @@ def train_shared_multi_dataset_generalization_for_candidates(
             "Train_Datasets": train_datasets_desc,
             "Config": config_name,
             "Layer": route_scope_name,
-            "Model": best_model,
+            "Model": model_type,
             "Candidate_Set": candidate_set_name
         })
         dataset_importances.append(importance)
@@ -1394,7 +1385,8 @@ def process_multi_dataset_generalization(
     train_pairwise_models=True,
     evaluation_root=None,
     evaluation_files=None,
-    evaluation_label_column="Target"
+    evaluation_label_column="Target",
+    model_type=DEFAULT_ROUTER_MODEL
 ):
     dataset_names = list(dataset_names or DATASET_LIST)
     print(f"\n{'='*70}")
@@ -1435,7 +1427,8 @@ def process_multi_dataset_generalization(
             route_scope_name="Shared MultiDataset Full Training (Full Candidate Set)",
             evaluation_root=evaluation_root,
             evaluation_files=evaluation_files,
-            evaluation_label_column=evaluation_label_column
+            evaluation_label_column=evaluation_label_column,
+            model_type=model_type
         )
         all_metrics.extend(full_metrics)
         all_importances.extend(full_importances)
@@ -1461,7 +1454,8 @@ def process_multi_dataset_generalization(
                 route_scope_name=pair_scope_name,
                 evaluation_root=evaluation_root,
                 evaluation_files=evaluation_files,
-                evaluation_label_column=evaluation_label_column
+                evaluation_label_column=evaluation_label_column,
+                model_type=model_type
             )
             all_metrics.extend(pair_metrics)
             all_importances.extend(pair_importances)
@@ -1588,6 +1582,15 @@ def parse_args():
         default="Target",
         help="Column containing the correct route name (or its class index). Default: Target.",
     )
+    parser.add_argument(
+        "--model-type",
+        choices=MODELS_TO_TRY,
+        default=DEFAULT_ROUTER_MODEL,
+        help=(
+            "Router model fixed before loading independent evaluation data. "
+            f"Default: {DEFAULT_ROUTER_MODEL}."
+        ),
+    )
     return parser.parse_args()
 
 def parse_evaluation_file_mapping(items):
@@ -1708,7 +1711,8 @@ def main():
                 train_pairwise_models=train_pairwise_models,
                 evaluation_root=args.eval_data_root,
                 evaluation_files=evaluation_files,
-                evaluation_label_column=args.eval_label_column
+                evaluation_label_column=args.eval_label_column,
+                model_type=args.model_type
             )
             if res:
                 d_metrics, d_ablation, d_importances = res

@@ -10,8 +10,6 @@
 #include "vamana/vamana.h"
 #include "MethodSelector.h"
 #include "ThreadPool.h"
-#include "../../../ACORN/faiss/IndexACORN.h"
-#include "../../../ACORN/faiss/index_io.h"
 #include <favor.h>
 #include <unordered_map>
 #include <bitset>
@@ -19,13 +17,7 @@
 #include <boost/dynamic_bitset.hpp>
 #include <roaring/roaring.h>
 #include <roaring/roaring.hh>
-#include <faiss_navix/IndexHNSW.h>
-#include "../curator/curator_wrapper.h"
 #include <memory>
-#ifdef ENABLE_KNOWHERE_MILVUS_BASELINE
-#include <knowhere/index/index.h>
-#include <knowhere/index/index_node.h>
-#endif
 
 using BitsetType = boost::dynamic_bitset<>;
 
@@ -206,7 +198,7 @@ namespace ANNS
                          bool is_ung_more_entry,
                          int lsearch_start, int lsearch_step,
                          int efs_start, int efs_step_slow,int efs_step_fast,int lsearch_threshold, 
-                         int routing_mode, int baseline_alg, faiss_navix::IndexHNSWFlat* navix_index = nullptr,
+                         int routing_mode, int baseline_alg,
                          const std::vector<IdxType> &true_query_group_ids = {},// Optional ground-truth source group id for each query.
                          const std::vector<int>& query_algo_choices = {},
                          std::queue<int> task_queue = std::queue<int>(),bool optimize_standalone_prefilter = false); 
@@ -228,7 +220,6 @@ namespace ANNS
       // I/O
       void save(std::string index_path_prefix, std::string results_path_prefix);
       void load(std::string index_path_prefix, std::string selector_modle_prefix, const std::string &data_type,
-                const std::string &acorn_index_path, const std::string &acorn_1_index_path,
                 const std::string &dataset, int routing_mode, int baseline_alg);
       void configure_rabitq_build(bool enable, size_t total_bits);
       void set_ung_distance_mode(const std::string &mode);
@@ -365,16 +356,6 @@ namespace ANNS
       ANNS::rabitq::RabitQSideIndex::QueryContext& query_ctx,
       QueryStats& stats,
       const ANNS::rabitq::RabitQSideIndex* side_index = nullptr);
-    bool run_milvus_knowhere_baseline(
-      IdxType query_id,
-      const char* query,
-      const std::vector<LabelType>& query_labels,
-      IdxType Lsearch,
-      IdxType K,
-      int milvus_baseline_alg,
-      SearchQueue& cur_result,
-      QueryStats& stats,
-      float& num_cmps_out);
     bool run_favor_baseline(
       IdxType query_id,
       const char* query,
@@ -433,9 +414,6 @@ namespace ANNS
     // CRoaring inverted index for Method 3: [AttrID] -> RoaringBitmap(GroupIDs)
     std::vector<roaring::Roaring> _group_attr_roaring_inv;
     void build_group_inverted_indices();// Build the inverted index.
-    void build_curator(const std::string& save_path = "");  // Build (or load) Curator index
-    void configure_curator(int nlist, int nprobe, int max_leaf_size, int search_ef, int beam_size);
-    CuratorContext& get_curator_context() { return _curator_ctx; }
     void set_base_storage(std::shared_ptr<IStorage> s) { _base_storage = s; }
     void evaluate_fpass_methods(std::shared_ptr<IStorage> query_storage, const std::string& output_csv_path);// Benchmark five Fpass computation methods.
 
@@ -462,8 +440,7 @@ namespace ANNS
     //                                bool is_ung_more_entry,
     //                                int lsearch_start, int lsearch_step,
     //                                int efs_start, int efs_step_slow,int efs_step_fast,int lsearch_threshold,
-    //                                int routing_mode,int baseline_alg, IdxType num_queries, 
-    //                                faiss_navix::IndexHNSWFlat* navix_index,
+    //                                int routing_mode,int baseline_alg, IdxType num_queries,
     //                                const std::vector<IdxType> &true_query_group_ids,const std::vector<int> &query_algo_choices);
 
       void thread_function(int id, SearchCacheList& search_cache_list,
@@ -478,8 +455,7 @@ namespace ANNS
                                    bool is_ung_more_entry,
                                    int lsearch_start, int lsearch_step,
                                    int efs_start, int efs_step_slow,int efs_step_fast,int lsearch_threshold,
-                                   int routing_mode,int baseline_alg, IdxType num_queries, 
-                                   faiss_navix::IndexHNSWFlat* navix_index,
+                                   int routing_mode,int baseline_alg, IdxType num_queries,
                            const std::vector<IdxType> &true_query_group_ids,const std::vector<int> &query_algo_choices,
                            bool optimize_standalone_prefilter);
       size_t get_candidate_count_for_label(LabelType label) const;
@@ -608,8 +584,6 @@ namespace ANNS
       uint64_t _rabitq_side_size_bytes = 0;
       UngDistanceMode _ung_distance_mode = UngDistanceMode::Exact;
       ANNS::rabitq::RabitQSideIndex _rabitq_side_index;
-      ANNS::rabitq::RabitQSideIndex _acorn_rabitq_side_index;
-      ANNS::rabitq::RabitQSideIndex _acorn_1_rabitq_side_index;
       const IStorage *_rabitq_cached_query_storage = nullptr;
       std::vector<std::unique_ptr<ANNS::rabitq::RabitQSideIndex::QueryContext>> _rabitq_query_ctx_cache;
       std::vector<double> _rabitq_query_ctx_prepare_ms;
@@ -621,21 +595,6 @@ namespace ANNS
       std::unique_ptr<MethodSelector> _trie_method_selector;
       TrieStaticMetrics _trie_static_metrics; // Cache static trie metrics to avoid recomputation.
 
-      // idea2 selector
-      std::shared_ptr<faiss::IndexACORNFlat> _acorn_index;
-      std::shared_ptr<faiss::IndexACORNFlat> _acorn_1_index;
-#ifdef ENABLE_KNOWHERE_MILVUS_BASELINE
-      knowhere::Index<knowhere::IndexNode> _milvus_knowhere_index;
-      bool _milvus_knowhere_ready = false;
-      bool _milvus_knowhere_is_ivf = true;
-      int _milvus_knowhere_nlist = 4096;
-      int _milvus_knowhere_nprobe = 16;
-      knowhere::Index<knowhere::IndexNode> _milvus_knowhere_hnsw_index;
-      bool _milvus_knowhere_hnsw_ready = false;
-      int _milvus_knowhere_hnsw_m = 32;
-      int _milvus_knowhere_hnsw_efc = 200;
-      int _milvus_knowhere_hnsw_ef = 100;
-#endif
       // FAVOR retains the distance-space parameter pointer after loading.
       // Declare this before _favor_index so it outlives the index as well.
       std::unique_ptr<hnswlib::L2Space> _favor_space;
@@ -643,16 +602,12 @@ namespace ANNS
       bool _favor_ready = false;
       double _favor_build_time_ms = -1.0;
       uint64_t _favor_serialized_index_size_bytes = 0;
-      std::unique_ptr<MethodSelector> _ung_acorn_selector;
       std::optional<bool> check_idea2_heuristic_override(const std::string& dataset_name, size_t num_entry_groups) const;
       std::optional<bool> check_pre_trie_heuristic(const std::string& dataset_name, size_t query_length, size_t candidate_set_size) const;
 
-      // Curator: hierarchical multi-tenant index (thin wrapper, like FAVOR)
-      CuratorContext _curator_ctx;
-
       // smartroute selector
       std::unique_ptr<MethodSelector> _smart_route_selector;    
-      int _smart_route_target_alg_id = 2; // Third algorithm class used for SODA class 0.
+      int _smart_route_target_alg_id = 12; // ALPS class 0: ef-aligned FAVOR-HNSW.
       std::unique_ptr<MethodSelector> _fast_route_single_selector;
       int _single_majority_acorn_id = 2;
       std::unique_ptr<MethodSelector> _fast_route_revised_selector;

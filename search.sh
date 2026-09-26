@@ -55,7 +55,6 @@ RESULT_OUTPUT_DIR="${ALGO_RESULT_DIR}/Index[${INDEX_DIR_NAME}]_GT[${GT_DIR_NAME}
 # --- Step 3: Create result directories ---
 mkdir -p "$RESULT_OUTPUT_DIR/results"
 mkdir -p "$RESULT_OUTPUT_DIR/others"
-mkdir -p "$(dirname "$CURATOR_INDEX_PATH")"
 
 # --- Step 4: Prepare the Lsearch parameter sequence ---
 LSEARCH_VALUES=$(seq "$LSEARCH_START" "$LSEARCH_STEP" "$LSEARCH_END" | tr '\n' ' ')
@@ -84,57 +83,13 @@ MODEL_PATH="${SHARED_OUTPUT_DIR}/SelectModels"
 if [[ -n "${SELECTOR_MODEL_PATH:-}" ]]; then
     MODEL_PATH="$SELECTOR_MODEL_PATH"
 fi
-CURATOR_INDEX_PATH="${SHARED_OUTPUT_DIR}/Index/CuratorIndex/curator_index.bin"
-# MODEL_PATH="/noraiddata/lijiakang/FilterVector/FilterVectorResults/OLD/${DATASET}/SelectModels"
-ACORN_INDEX_PREFIX="${INDEX_PATH}/acorn_output"
-NAVIX_INDEX_PATH="${INDEX_PATH}/navix_output/hnsw_base.index"
-ACORN_INDEX_FILE="${ACORN_INDEX_PREFIX}/acorn.index"
-ACORN_1_INDEX_FILE="${ACORN_INDEX_PREFIX}/acorn1.index"
 
 QUERY_DIR="${DATA_DIR}/${QUERY_DIR_NAME}"
 echo "Using query directory from: $QUERY_DIR"
 
-# In SmartRoute++ / RabitQ-based scenarios, UNG uses the RQB index.
-# If the RQB directory does not contain the required ACORN or NaviX files,
-# automatically fall back to the corresponding artifacts in the non-RQB directory.
-if [[ "$UNG_DISTANCE_MODE" == "rabitq" && "$INDEX_DIR_NAME" =~ ^(.*)_RQB[0-9]+$ ]]; then
-    EXACT_INDEX_DIR_NAME="${BASH_REMATCH[1]}"
-    EXACT_INDEX_PATH="${SHARED_OUTPUT_DIR}/${INDEX_BASE_DIR}/${EXACT_INDEX_DIR_NAME}"
-
-    # In RabitQ mode, prefer RabitQ ACORN files; if unavailable in the RQB
-    # directory, fall back to the standard ACORN files in the exact directory.
-    if [[ ! -f "${ACORN_INDEX_PREFIX}/acorn_rabitq.index" || ! -f "${ACORN_INDEX_PREFIX}/acorn1_rabitq.index" ]]; then
-        if [[ -f "${EXACT_INDEX_PATH}/acorn_output/acorn.index" && -f "${EXACT_INDEX_PATH}/acorn_output/acorn1.index" ]]; then
-            echo "[INFO] ACORN RAbitQ index files not found in RQB dir, fallback to exact dir: ${EXACT_INDEX_PATH}/acorn_output"
-            ACORN_INDEX_PREFIX="${EXACT_INDEX_PATH}/acorn_output"
-        fi
-    fi
-
-    if [[ ! -f "$NAVIX_INDEX_PATH" && -f "${EXACT_INDEX_PATH}/navix_output/hnsw_base.index" ]]; then
-        echo "[INFO] NaviX index not found in RQB dir, fallback to exact dir: ${EXACT_INDEX_PATH}/navix_output/hnsw_base.index"
-        NAVIX_INDEX_PATH="${EXACT_INDEX_PATH}/navix_output/hnsw_base.index"
-    fi
-fi
-
-# Reset the default index paths based on the final ACORN_INDEX_PREFIX
-ACORN_INDEX_FILE="${ACORN_INDEX_PREFIX}/acorn.index"
-ACORN_1_INDEX_FILE="${ACORN_INDEX_PREFIX}/acorn1.index"
-
-if [[ "$UNG_DISTANCE_MODE" == "rabitq" ]]; then
-    if [[ -f "${ACORN_INDEX_PREFIX}/acorn_rabitq.index" && -f "${ACORN_INDEX_PREFIX}/acorn1_rabitq.index" ]]; then
-        ACORN_INDEX_FILE="${ACORN_INDEX_PREFIX}/acorn_rabitq.index"
-        ACORN_1_INDEX_FILE="${ACORN_INDEX_PREFIX}/acorn1_rabitq.index"
-        echo "[INFO] Using ACORN RAbitQ index files."
-    else
-        echo "[INFO] ACORN RAbitQ index files not found, fallback to standard ACORN files."
-    fi
-fi
-
 echo "Using index directory: $INDEX_PATH"
 echo "Using ground-truth directory: $GT_PATH"
 echo "Search results will be written to: $RESULT_OUTPUT_DIR"
-echo "Using ACORN index: ${ACORN_INDEX_FILE}"
-echo "Using NaviX index: $NAVIX_INDEX_PATH"
 
 # --- Step 6: Ensure query is in .bin format ---
 QUERY_FVECS="${QUERY_DIR}/${DATASET}_query.fvecs"
@@ -173,12 +128,6 @@ SEARCH_COMMAND=(
     --is_new_trie_method "$IS_NEW_TRIE_METHOD" --is_rec_more_start "$IS_REC_MORE_START" \
     --routing_mode "$ROUTING_MODE" \
     --baseline_alg "$BASELINE_ALG" \
-    --curator_nlist "${CURATOR_NLIST:-32}" \
-    --curator_nprobe "${CURATOR_NPROBE:-16}" \
-    --curator_max_leaf_size "${CURATOR_MAX_LEAF_SIZE:-128}" \
-    --curator_search_ef "${CURATOR_SEARCH_EF:-10}" \
-    --curator_beam_size "${CURATOR_BEAM_SIZE:-1}" \
-    --curator_index_path "$CURATOR_INDEX_PATH" \
     --base_bin_file "$DATA_DIR/${DATASET}_base.bin" \
     --base_label_file "$DATA_DIR/${DATASET}_base_labels.txt" \
     --query_bin_file "$QUERY_DIR/${DATASET}_query.bin" \
@@ -187,7 +136,6 @@ SEARCH_COMMAND=(
     --gt_file "$GT_PATH/${DATASET}_gt_labels_containment.bin" \
     --index_path_prefix "$INDEX_PATH/index_files/" \
     --result_path_prefix "$RESULT_OUTPUT_DIR/results/" \
-    --acorn_index_path "${ACORN_INDEX_FILE}" --acorn_1_index_path "${ACORN_1_INDEX_FILE}" \
     --selector_modle_prefix "${MODEL_PATH}" \
     --scenario containment \
     --num_entry_points "$NUM_ENTRY_POINTS" \
@@ -197,8 +145,7 @@ SEARCH_COMMAND=(
     --efs_start "$EFS_START" \
     --efs_step_slow "$EFS_STEP_SLOW" --efs_step_fast "$EFS_STEP_FAST" --lsearch_threshold "$LSEARCH_THRESHOLD" \
     --ung_distance_mode "$UNG_DISTANCE_MODE" \
-    --navix_index_path "$NAVIX_INDEX_PATH" \
-    --algo_choice_csv "${ALGO_CHOICE_CSV:-$QUERY_DIR/algo_choice_repeat.csv}" \
+    --algo_choice_csv "${ALGO_CHOICE_CSV:-}" \
     --optimize_standalone_prefilter "${OPTIMIZE_STANDALONE_PREFILTER:-false}"
 )
 
