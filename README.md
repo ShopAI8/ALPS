@@ -157,9 +157,3 @@ The decision model for intelligent routing is trained using Python scripts:
 
 - **Training**: Use `selector/smart_route_train.py`.
 - **Deployment**: Export the trained model to `.onnx` format and place it in the `SelectModels` directory, where it can be loaded by the C++ `MethodSelector`.
-
-Routing labels are generated deterministically. Candidates must first reach
-recall 0.90; the candidate with the highest QPS after six-decimal rounding is
-selected. A QPS tie is resolved by higher recall, followed by the fixed order
-TFNG, FAVOR, and pre-filter. The historical CSV name `UNG++-sorted-lng` is
-treated as TFNG.

@@ -60,7 +60,7 @@ ROUTE_STRATEGY = {
 # Training mode configuration
 RUN_SINGLE_DATASET_TRAINING = False
 RUN_MULTI_DATASET_GENERALIZATION = True # Train one shared model with 100% of the valid samples from every dataset
-RUN_CROSS_DATASET_HOLDOUT = False # Train on the other 7 datasets only, then evaluate on the target dataset as a pure holdout
+RUN_CROSS_DATASET_HOLDOUT = False # Train on the other 7 datasets, then evaluate on the target's external query task
 GENERALIZATION_HOLDOUT_TARGET_DATASETS = DATASET_LIST.copy()
 
 # Output paths. Results for the 8-dataset generalization runs are stored under models_8datasets.
@@ -976,8 +976,12 @@ def train_cross_dataset_holdout_for_candidates(
     algo_list,
     output_dir,
     report_path,
-    route_scope_name
+    route_scope_name,
+    evaluation_root=None,
+    evaluation_files=None,
+    evaluation_label_column="Target"
 ):
+    """Train on seven source datasets and evaluate only on an external query task."""
     if len(aux_dataset_names) == 0:
         print(f"❌ {route_scope_name} 没有可用的训练数据集。")
         return [], [], []
@@ -1016,32 +1020,42 @@ def train_cross_dataset_holdout_for_candidates(
         print(f"❌ {route_scope_name} 没有可用的跨数据集训练样本。")
         return [], [], []
 
-    df_target = load_dataset_dataframe(target_dataset_name, config_name)
-    if df_target is None:
-        return [], [], []
-
-    prepared_target = prepare_routing_training_data(
-        df_target,
+    eval_df, eval_csv_path = load_external_evaluation_dataframe(
         target_dataset_name,
-        algo_list,
-        f"{route_scope_name} | Test Target: {target_dataset_name}"
+        config_name,
+        evaluation_root=evaluation_root,
+        evaluation_files=evaluation_files
     )
-    if prepared_target is None:
+    if eval_df is None:
         return [], [], []
 
     X_train = pd.concat(train_feature_frames, axis=0, ignore_index=True)
     y_train = pd.concat(train_target_frames, axis=0, ignore_index=True)
 
-    target_test_indices = prepared_target["valid_indices"]
-    X_test = prepared_target["X"].loc[target_test_indices].copy()
-    y_test = prepared_target["work_df"].loc[target_test_indices, "Target"].copy()
-    y_global_best_test = prepared_target["work_df"].loc[target_test_indices, "Global_Best"]
+    try:
+        prepared_evaluation = prepare_external_routing_evaluation_data(
+            eval_df,
+            target_dataset_name,
+            algo_list,
+            evaluation_label_column
+        )
+    except ValueError as exc:
+        print(f"❌ {exc}")
+        return [], [], []
+
+    prepared_evaluation["csv_path"] = eval_csv_path
+    X_test = prepared_evaluation["X"]
+    y_test = prepared_evaluation["y"]
+    y_global_best_test = y_test
 
     if y_train.nunique() < 2:
         print(f"❌ {route_scope_name} 聚合后的训练标签仍然只有一个类别，无法训练。")
         return [], [], []
 
-    print(f"\n[{route_scope_name} - 纯跨数据集训练启动 | Train: {aux_dataset_names} -> Test: {target_dataset_name}(100% valid)]")
+    print(
+        f"\n[{route_scope_name} - Leave-One-Out 训练启动 | "
+        f"Train: {aux_dataset_names} -> External Query Task: {target_dataset_name}]"
+    )
 
     selection_cache = {}
     selection_metrics = []
@@ -1065,7 +1079,7 @@ def train_cross_dataset_holdout_for_candidates(
                 "Pred_Latency_us": final_res["pred_latency_us"],
                 "Test_Size": final_res["test_size"]
             })
-            print(f"  > {model_type:<15} | 跨数据集目标域准确率: {final_res['acc']:.4%}")
+            print(f"  > {model_type:<15} | 外部查询任务准确率: {final_res['acc']:.4%}")
         except ImportError:
             print(f"  > ⚠️ 缺少 {model_type} 引擎依赖库。")
         except Exception as e:
@@ -1076,7 +1090,7 @@ def train_cross_dataset_holdout_for_candidates(
         return [], [], []
 
     best_model = max(selection_metrics, key=lambda x: x["Accuracy"])["Model"]
-    strategy_desc = "Cross-Dataset Holdout Accuracy"
+    strategy_desc = "External Query Task Accuracy"
 
     res = selection_cache[best_model]
     candidate_set_name = " vs ".join(algo_list)
@@ -1088,7 +1102,7 @@ def train_cross_dataset_holdout_for_candidates(
 
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n")
-        f.write("┃         Cross-Dataset Holdout Routing Assessment Report          ┃\n")
+        f.write("┃       Leave-One-Out External Query Assessment Report             ┃\n")
         f.write("┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n")
         f.write(f"┃ 测试集  : {target_dataset_name:<15} 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S'):<20} ┃\n")
         f.write(f"┃ 配置    : {config_name:<52} ┃\n")
@@ -1105,15 +1119,20 @@ def train_cross_dataset_holdout_for_candidates(
                 f"unknown={stat['Unknown_Count']}/{stat['Total_Samples']} ({stat['Unknown_Rate']:.4%})\n"
             )
         f.write(f"  ▶ 聚合训练样本数: {len(X_train)}\n")
-        f.write(f"  ▶ 目标数据集测试样本数(100% valid): {len(X_test)}\n\n")
+        f.write(f"  ▶ 外部查询 CSV: {prepared_evaluation['csv_path']}\n")
+        f.write(f"  ▶ 外部查询有效样本数: {len(X_test)}\n\n")
 
-        f.write("【壹 | 测试结果 (Cross-Dataset Holdout Evaluation)】\n")
+        f.write("【壹 | 测试结果 (External Query Task Evaluation)】\n")
         f.write("-" * 80 + "\n")
         f.write(f"  ▶ 选定引擎 : {best_model}\n")
         f.write(f"  ▶ 候选算法 : {', '.join(algo_list)}\n")
-        f.write(f"  ▶ 目标集 Unknown 样本数 : {prepared_target['unknown_count']} / {prepared_target['total_count']} ({prepared_target['unknown_rate']:.4%})\n")
-        f.write(f"  🚀 目标集分类准确率: {res['acc']:.4%}\n")
-        f.write(f"  🚀 目标集端到端分发准确率: {system_acc:.4%}\n\n")
+        f.write(
+            f"  ▶ 外部查询忽略样本数 : {prepared_evaluation['ignored_count']} / "
+            f"{prepared_evaluation['total_count']} "
+            f"({prepared_evaluation['ignored_count'] / prepared_evaluation['total_count']:.4%})\n"
+        )
+        f.write(f"  🚀 外部查询分类准确率: {res['acc']:.4%}\n")
+        f.write(f"  🚀 外部查询端到端分发准确率: {system_acc:.4%}\n\n")
 
         f.write("【贰 | 胜出模型透视 (Selected Model Deep Dive)】\n")
         f.write("-" * 80 + "\n")
@@ -1123,6 +1142,10 @@ def train_cross_dataset_holdout_for_candidates(
         f.write("  ▶ 特征重要性:\n  " + res['importance_str'].replace('\n', '\n  ') + "\n\n")
 
     dataset_metrics = []
+    ignored_rate = (
+        prepared_evaluation["ignored_count"] / prepared_evaluation["total_count"]
+        if prepared_evaluation["total_count"] else 0.0
+    )
     for m in selection_metrics:
         m_copy = m.copy()
         m_copy.update({
@@ -1132,9 +1155,14 @@ def train_cross_dataset_holdout_for_candidates(
             "Config": config_name,
             "Layer": route_scope_name,
             "Candidate_Set": candidate_set_name,
-            "Unknown_Count": prepared_target["unknown_count"],
-            "Unknown_Rate": prepared_target["unknown_rate"],
-            "Total_Samples": prepared_target["total_count"]
+            "Train_Size": len(X_train),
+            "Evaluation_Size": m["Test_Size"],
+            "Evaluation_Scope": "IndependentQueries",
+            "Evaluation_CSV": prepared_evaluation["csv_path"],
+            "Model_Selection": "ExternalQueryAccuracy",
+            "Unknown_Count": prepared_evaluation["ignored_count"],
+            "Unknown_Rate": ignored_rate,
+            "Total_Samples": prepared_evaluation["total_count"]
         })
         dataset_metrics.append(m_copy)
 
@@ -1149,10 +1177,15 @@ def train_cross_dataset_holdout_for_candidates(
         "Train_Time_ms": np.nan,
         "Pred_Latency_us": np.nan,
         "Test_Size": len(y_global_best_test[y_global_best_test != 'Unknown']),
+        "Train_Size": len(X_train),
+        "Evaluation_Size": len(y_global_best_test),
+        "Evaluation_Scope": "IndependentQueries",
+        "Evaluation_CSV": prepared_evaluation["csv_path"],
+        "Model_Selection": "ExternalQueryAccuracy",
         "Candidate_Set": candidate_set_name,
-        "Unknown_Count": prepared_target["unknown_count"],
-        "Unknown_Rate": prepared_target["unknown_rate"],
-        "Total_Samples": prepared_target["total_count"]
+        "Unknown_Count": prepared_evaluation["ignored_count"],
+        "Unknown_Rate": ignored_rate,
+        "Total_Samples": prepared_evaluation["total_count"]
     })
 
     dataset_importances = []
@@ -1503,10 +1536,16 @@ def process_cross_dataset_holdout(
     target_dataset_name,
     config_name,
     train_full_model=True,
-    train_pairwise_models=True
+    train_pairwise_models=True,
+    evaluation_root=None,
+    evaluation_files=None,
+    evaluation_label_column="Target"
 ):
     print(f"\n{'='*70}")
-    print(f"🌍 开始 7 训 1 测评估: Train(其他 7 个数据集) -> Test({target_dataset_name}) | 配置: {config_name}")
+    print(
+        f"🌍 开始 Leave-One-Out 外部查询评估: "
+        f"Train(其他 7 个数据集) -> External Query Task({target_dataset_name}) | 配置: {config_name}"
+    )
     print(f"{'='*70}")
 
     aux_dataset_names = [name for name in DATASET_LIST if name != target_dataset_name]
@@ -1526,7 +1565,9 @@ def process_cross_dataset_holdout(
     all_metrics = []
     all_importances = []
 
-    full_algo_list = select_common_algorithms(aux_dataset_names, target_dataset_name, config_name)
+    # Candidate discovery must use only the seven training datasets. The held-out
+    # dataset contributes only its independent external query task for evaluation.
+    full_algo_list = select_common_algorithms_for_datasets(aux_dataset_names, config_name)
     if full_algo_list is None:
         return [], [], []
 
@@ -1539,7 +1580,10 @@ def process_cross_dataset_holdout(
             algo_list=full_algo_list,
             output_dir=output_dir,
             report_path=full_report_path,
-            route_scope_name="CrossDataset Holdout (Full Candidate Set)"
+            route_scope_name="CrossDataset Holdout (Full Candidate Set)",
+            evaluation_root=evaluation_root,
+            evaluation_files=evaluation_files,
+            evaluation_label_column=evaluation_label_column
         )
         all_metrics.extend(full_metrics)
         all_importances.extend(full_importances)
@@ -1560,7 +1604,10 @@ def process_cross_dataset_holdout(
                 algo_list=pair_list,
                 output_dir=pair_output_dir,
                 report_path=pair_report_path,
-                route_scope_name=pair_scope_name
+                route_scope_name=pair_scope_name,
+                evaluation_root=evaluation_root,
+                evaluation_files=evaluation_files,
+                evaluation_label_column=evaluation_label_column
             )
             all_metrics.extend(pair_metrics)
             all_importances.extend(pair_importances)
@@ -1672,9 +1719,9 @@ def main():
         print(f"❌ {exc}")
         return
 
-    if RUN_MULTI_DATASET_GENERALIZATION and not args.eval_data_root and not evaluation_files:
+    if (RUN_MULTI_DATASET_GENERALIZATION or RUN_CROSS_DATASET_HOLDOUT) and not args.eval_data_root and not evaluation_files:
         print(
-            "❌ 全量共享训练需要另一批独立查询进行准确率评估。\n"
+            "❌ 全量共享训练和 Leave-One-Out 都需要另一批独立查询进行准确率评估。\n"
             "   请使用 --eval-data-root ROOT，或用 --eval-files Dataset=/path/file.csv 分别提供。"
         )
         return
@@ -1712,7 +1759,10 @@ def main():
     if RUN_MULTI_DATASET_GENERALIZATION:
         print(f"🌍 已启用 8 数据集全量共享路由训练: {', '.join(GENERALIZATION_TARGET_DATASETS)}")
     if RUN_CROSS_DATASET_HOLDOUT:
-        print(f"🧪 已启用 7 训 1 测模式，目标数据集: {', '.join(GENERALIZATION_HOLDOUT_TARGET_DATASETS)}")
+        print(
+            f"🧪 已启用 7 数据集训练 + 外部查询任务测评的 Leave-One-Out 模式，"
+            f"目标数据集: {', '.join(GENERALIZATION_HOLDOUT_TARGET_DATASETS)}"
+        )
 
     for config_name in config_names:
         print(f"\n{'#' * 80}")
@@ -1763,7 +1813,10 @@ def main():
                     target_dataset,
                     config_name,
                     train_full_model=not pairwise_only,
-                    train_pairwise_models=train_pairwise_models
+                    train_pairwise_models=train_pairwise_models,
+                    evaluation_root=args.eval_data_root,
+                    evaluation_files=evaluation_files,
+                    evaluation_label_column=args.eval_label_column
                 )
                 if res:
                     d_metrics, d_ablation, d_importances = res
