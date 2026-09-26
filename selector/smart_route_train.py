@@ -34,7 +34,7 @@ DATASET_LIST = ["Amazon", "BookReviews", "Genome", "Music", "Reviews", "Tiktok",
 GENERALIZATION_TARGET_DATASETS = DATASET_LIST.copy()
 BASE_DIR = os.environ.get(
     "ALPS_RESULTS_DIR",
-    "/noraiddata/lijiakang/FilterVector/FilterVectorResults"
+    "/your_path/FilterVector/FilterVectorResults"
 )
 EDA_ROOT_DIR = os.path.join(BASE_DIR, "EDA_Plots_try")
 
@@ -63,9 +63,8 @@ ROUTE_STRATEGY = {
 
 # Training mode configuration
 RUN_SINGLE_DATASET_TRAINING = False
-RUN_MULTI_DATASET_GENERALIZATION = True # Split every dataset 80/20, train one shared model on all 80% splits, then test it on every 20% split
+RUN_MULTI_DATASET_GENERALIZATION = True # Train one shared model with 100% of the valid samples from every dataset
 RUN_CROSS_DATASET_HOLDOUT = False # Train on the other 7 datasets only, then evaluate on the target dataset as a pure holdout
-TARGET_DATASET_TRAIN_RATIO = 0.8
 GENERALIZATION_HOLDOUT_TARGET_DATASETS = DATASET_LIST.copy()
 
 # Output paths. Results for the 8-dataset generalization runs are stored under models_8datasets.
@@ -584,7 +583,8 @@ def write_summary_outputs(global_metrics, global_ablation, global_importances, c
     df_all = pd.DataFrame(global_metrics)
     cols_order = [
         "Mode", "Config", "Dataset", "Model", "Accuracy",
-        "Train_Time_ms", "Pred_Latency_us", "Test_Size",
+        "Train_Time_ms", "Pred_Latency_us", "Train_Size", "Test_Size",
+        "Evaluation_Size", "Evaluation_Scope",
         "Unknown_Count", "Unknown_Rate", "Total_Samples"
     ]
     df_all = df_all[[c for c in cols_order if c in df_all.columns]]
@@ -1056,7 +1056,7 @@ def train_shared_multi_dataset_generalization_for_candidates(
     report_path,
     route_scope_name
 ):
-    """Train one router on every dataset's 80% split and test it on each 20% split."""
+    """Train one shared router with all valid samples from every dataset."""
     if not dataset_names:
         print(f"❌ {route_scope_name} 没有可用的数据集。")
         return [], [], []
@@ -1065,7 +1065,7 @@ def train_shared_multi_dataset_generalization_for_candidates(
     train_feature_frames = []
     train_target_frames = []
     dataset_stats = []
-    test_splits = {}
+    dataset_training_sets = {}
 
     for dataset_name in dataset_names:
         df = load_dataset_dataframe(dataset_name, config_name)
@@ -1076,46 +1076,28 @@ def train_shared_multi_dataset_generalization_for_candidates(
             df,
             dataset_name,
             algo_list,
-            f"{route_scope_name} | Split: {dataset_name}"
+            f"{route_scope_name} | Full training data: {dataset_name}"
         )
         if prepared is None:
             return [], [], []
 
         valid_indices = prepared["valid_indices"]
-        y_valid = prepared["work_df"].loc[valid_indices, "Target"]
-        stratify_labels = y_valid if y_valid.value_counts().min() >= 2 else None
-        try:
-            train_idx, test_idx = train_test_split(
-                valid_indices,
-                train_size=TARGET_DATASET_TRAIN_RATIO,
-                random_state=42,
-                stratify=stratify_labels
-            )
-        except ValueError as exc:
-            if stratify_labels is None:
-                raise
-            print(f"⚠️ {dataset_name} 无法分层切分（{exc}），改用固定随机非分层切分。")
-            train_idx, test_idx = train_test_split(
-                valid_indices,
-                train_size=TARGET_DATASET_TRAIN_RATIO,
-                random_state=42,
-                stratify=None
-            )
+        dataset_X = prepared["X"].loc[valid_indices].copy()
+        dataset_y = prepared["work_df"].loc[valid_indices, "Target"].copy()
 
-        train_feature_frames.append(prepared["X"].loc[train_idx].copy())
-        train_target_frames.append(prepared["work_df"].loc[train_idx, "Target"].copy())
-        test_splits[dataset_name] = {
-            "X": prepared["X"].loc[test_idx].copy(),
-            "y": prepared["work_df"].loc[test_idx, "Target"].copy(),
-            "y_global_best": prepared["work_df"].loc[test_idx, "Global_Best"].copy(),
+        train_feature_frames.append(dataset_X)
+        train_target_frames.append(dataset_y)
+        dataset_training_sets[dataset_name] = {
+            "X": dataset_X,
+            "y": dataset_y,
+            "y_global_best": prepared["work_df"].loc[valid_indices, "Global_Best"].copy(),
             "unknown_count": prepared["unknown_count"],
             "unknown_rate": prepared["unknown_rate"],
             "total_count": prepared["total_count"]
         }
         dataset_stats.append({
             "Dataset": dataset_name,
-            "Train_Samples": len(train_idx),
-            "Test_Samples": len(test_idx),
+            "Train_Samples": len(valid_indices),
             "Unknown_Count": prepared["unknown_count"],
             "Unknown_Rate": prepared["unknown_rate"],
             "Total_Samples": prepared["total_count"]
@@ -1123,25 +1105,12 @@ def train_shared_multi_dataset_generalization_for_candidates(
 
     X_train = pd.concat(train_feature_frames, axis=0, ignore_index=True)
     y_train = pd.concat(train_target_frames, axis=0, ignore_index=True)
-    X_test_all = pd.concat(
-        [test_splits[name]["X"] for name in dataset_names],
-        axis=0,
-        ignore_index=True
-    )
-    y_test_all = pd.concat(
-        [test_splits[name]["y"] for name in dataset_names],
-        axis=0,
-        ignore_index=True
-    )
 
     if y_train.nunique() < 2:
         print(f"❌ {route_scope_name} 聚合后的训练标签只有一个类别，无法训练。")
         return [], [], []
 
-    print(
-        f"\n[{route_scope_name} | 每个数据集使用 {TARGET_DATASET_TRAIN_RATIO:.0%} 训练，"
-        f"{1 - TARGET_DATASET_TRAIN_RATIO:.0%} 测试 | 全局模型只训练一次]"
-    )
+    print(f"\n[{route_scope_name} | 每个数据集 100% 有效样本用于训练 | 不划分内部测试集]")
 
     selection_cache = {}
     selection_metrics = []
@@ -1150,8 +1119,8 @@ def train_shared_multi_dataset_generalization_for_candidates(
             result = train_and_evaluate_model(
                 X_train,
                 y_train,
-                X_test_all,
-                y_test_all,
+                X_train,
+                y_train,
                 target_map,
                 model_type,
                 use_smote=USE_SMOTE
@@ -1162,9 +1131,11 @@ def train_shared_multi_dataset_generalization_for_candidates(
                 "Accuracy": result["acc"],
                 "Train_Time_ms": result["train_time_ms"],
                 "Pred_Latency_us": result["pred_latency_us"],
-                "Test_Size": result["test_size"]
+                "Train_Size": len(X_train),
+                "Evaluation_Size": result["test_size"],
+                "Evaluation_Scope": "TrainingSetInSample"
             })
-            print(f"  > {model_type:<15} | 合并测试集准确率: {result['acc']:.4%}")
+            print(f"  > {model_type:<15} | 训练集拟合准确率: {result['acc']:.4%}")
         except ImportError:
             print(f"  > ⚠️ 缺少 {model_type} 引擎依赖库。")
         except Exception as exc:
@@ -1177,28 +1148,28 @@ def train_shared_multi_dataset_generalization_for_candidates(
     best_model = max(selection_metrics, key=lambda item: item["Accuracy"])["Model"]
     result = selection_cache[best_model]
     candidate_set_name = " vs ".join(algo_list)
-    dataset_evaluations = {}
+    dataset_training_evaluations = {}
 
     for dataset_name in dataset_names:
-        split = test_splits[dataset_name]
+        training_set = dataset_training_sets[dataset_name]
         evaluation = evaluate_trained_model(
-            split["X"],
-            split["y"],
+            training_set["X"],
+            training_set["y"],
             target_map,
             result["classifier"],
             result["real_classes"]
         )
         evaluation["system_acc"] = calculate_system_accuracy(
-            split["X"],
-            split["y_global_best"],
+            training_set["X"],
+            training_set["y_global_best"],
             result["classifier"],
             result["real_classes"],
             target_map
         )
-        dataset_evaluations[dataset_name] = evaluation
+        dataset_training_evaluations[dataset_name] = evaluation
         print(
-            f"  > {dataset_name:<15} | 20% 准确率: {evaluation['acc']:.4%} | "
-            f"测试样本: {evaluation['test_size']}"
+            f"  > {dataset_name:<15} | 训练集拟合准确率: {evaluation['acc']:.4%} | "
+            f"训练样本: {evaluation['test_size']}"
         )
 
     os.makedirs(output_dir, exist_ok=True)
@@ -1212,43 +1183,43 @@ def train_shared_multi_dataset_generalization_for_candidates(
     )
     save_class_labels(output_dir, algo_list)
 
-    macro_accuracy = np.mean([item["acc"] for item in dataset_evaluations.values()])
+    macro_accuracy = np.mean([item["acc"] for item in dataset_training_evaluations.values()])
     with open(report_path, "w", encoding="utf-8") as report:
-        report.write("Shared Multi-Dataset Routing Assessment Report\n")
+        report.write("Shared Multi-Dataset Full-Training Report\n")
         report.write("=" * 80 + "\n")
         report.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         report.write(f"配置: {config_name}\n")
         report.write(f"数据集: {', '.join(dataset_names)}\n")
         report.write(f"候选算法: {candidate_set_name}\n")
         report.write(f"选定模型: {best_model}\n")
-        report.write("切分方式: 每个数据集独立分层 80%/20%\n\n")
+        report.write("切分方式: 不切分，每个数据集 100% 有效样本用于训练\n")
+        report.write("注意: 以下 Accuracy 是训练集上的拟合准确率，不是留出测试集结果\n\n")
 
-        report.write("【训练与测试样本】\n")
+        report.write("【训练样本】\n")
         report.write("-" * 80 + "\n")
         for stat in dataset_stats:
             report.write(
                 f"{stat['Dataset']}: train={stat['Train_Samples']}, "
-                f"test={stat['Test_Samples']}, unknown={stat['Unknown_Count']}/"
+                f"unknown={stat['Unknown_Count']}/"
                 f"{stat['Total_Samples']} ({stat['Unknown_Rate']:.4%})\n"
             )
         report.write(f"聚合训练样本数: {len(X_train)}\n")
-        report.write(f"聚合测试样本数: {len(X_test_all)}\n")
         report.write(f"全局模型训练耗时: {result['train_time_ms']:.2f} ms\n")
-        report.write(f"合并测试集准确率: {result['acc']:.4%}\n")
-        report.write(f"各数据集宏平均准确率: {macro_accuracy:.4%}\n\n")
+        report.write(f"合并训练集拟合准确率: {result['acc']:.4%}\n")
+        report.write(f"各数据集训练拟合准确率宏平均: {macro_accuracy:.4%}\n\n")
 
-        report.write("【各数据集 20% 测试结果】\n")
+        report.write("【各数据集训练集拟合结果】\n")
         report.write("-" * 80 + "\n")
         for dataset_name in dataset_names:
-            split = test_splits[dataset_name]
-            evaluation = dataset_evaluations[dataset_name]
+            training_set = dataset_training_sets[dataset_name]
+            evaluation = dataset_training_evaluations[dataset_name]
             report.write(f"[{dataset_name}]\n")
-            report.write(f"Test size: {evaluation['test_size']}\n")
-            report.write(f"Accuracy: {evaluation['acc']:.4%}\n")
-            report.write(f"System end-to-end accuracy: {evaluation['system_acc']:.4%}\n")
+            report.write(f"Training size: {evaluation['test_size']}\n")
+            report.write(f"Training-set accuracy: {evaluation['acc']:.4%}\n")
+            report.write(f"Training-set routing accuracy: {evaluation['system_acc']:.4%}\n")
             report.write(
-                f"Unknown: {split['unknown_count']}/{split['total_count']} "
-                f"({split['unknown_rate']:.4%})\n"
+                f"Unknown: {training_set['unknown_count']}/{training_set['total_count']} "
+                f"({training_set['unknown_rate']:.4%})\n"
             )
             report.write("Classification report:\n" + evaluation["cls_report"] + "\n")
             report.write("Confusion matrix:\n" + evaluation["cm_df"].to_string() + "\n\n")
@@ -1257,20 +1228,21 @@ def train_shared_multi_dataset_generalization_for_candidates(
         report.write("-" * 80 + "\n")
         report.write(result["importance_str"] + "\n")
 
-    train_datasets_desc = ",".join([f"{name}(80%)" for name in dataset_names])
+    train_datasets_desc = ",".join([f"{name}(100%)" for name in dataset_names])
     dataset_metrics = []
     for dataset_name in dataset_names:
-        split = test_splits[dataset_name]
-        evaluation = dataset_evaluations[dataset_name]
+        training_set = dataset_training_sets[dataset_name]
+        evaluation = dataset_training_evaluations[dataset_name]
         common_fields = {
-            "Mode": "SharedMultiDatasetGeneralization",
+            "Mode": "SharedMultiDatasetFullTraining",
             "Dataset": dataset_name,
             "Train_Datasets": train_datasets_desc,
             "Config": config_name,
             "Candidate_Set": candidate_set_name,
-            "Unknown_Count": split["unknown_count"],
-            "Unknown_Rate": split["unknown_rate"],
-            "Total_Samples": split["total_count"]
+            "Unknown_Count": training_set["unknown_count"],
+            "Unknown_Rate": training_set["unknown_rate"],
+            "Total_Samples": training_set["total_count"],
+            "Evaluation_Scope": "TrainingSetInSample"
         }
         dataset_metrics.append({
             **common_fields,
@@ -1279,7 +1251,8 @@ def train_shared_multi_dataset_generalization_for_candidates(
             "Accuracy": evaluation["acc"],
             "Train_Time_ms": result["train_time_ms"],
             "Pred_Latency_us": evaluation["pred_latency_us"],
-            "Test_Size": evaluation["test_size"]
+            "Train_Size": evaluation["test_size"],
+            "Evaluation_Size": evaluation["test_size"]
         })
         dataset_metrics.append({
             **common_fields,
@@ -1288,14 +1261,15 @@ def train_shared_multi_dataset_generalization_for_candidates(
             "Accuracy": evaluation["system_acc"],
             "Train_Time_ms": np.nan,
             "Pred_Latency_us": np.nan,
-            "Test_Size": evaluation["test_size"]
+            "Train_Size": evaluation["test_size"],
+            "Evaluation_Size": evaluation["test_size"]
         })
 
     dataset_importances = []
     if result["importances_dict"]:
         importance = result["importances_dict"].copy()
         importance.update({
-            "Mode": "SharedMultiDatasetGeneralization",
+            "Mode": "SharedMultiDatasetFullTraining",
             "Dataset": "AllDatasets",
             "Train_Datasets": train_datasets_desc,
             "Config": config_name,
@@ -1305,7 +1279,7 @@ def train_shared_multi_dataset_generalization_for_candidates(
         })
         dataset_importances.append(importance)
 
-    print(f"\n✅ 全局路由模型训练与八数据集评估完成: {report_path}")
+    print(f"\n✅ 全局路由模型已使用八数据集的全部有效样本完成训练: {report_path}")
     return dataset_metrics, [], dataset_importances
 
 def process_multi_dataset_generalization(
@@ -1317,8 +1291,8 @@ def process_multi_dataset_generalization(
     dataset_names = list(dataset_names or DATASET_LIST)
     print(f"\n{'='*70}")
     print(
-        f"🌍 开始共享全局路由训练: Train(每个数据集 80%) -> "
-        f"Test(每个数据集 20%) | 配置: {config_name}"
+        f"🌍 开始共享全局路由训练: "
+        f"每个数据集 100% 有效样本用于训练 | 配置: {config_name}"
     )
     print(f"{'='*70}")
 
@@ -1350,7 +1324,7 @@ def process_multi_dataset_generalization(
             algo_list=full_algo_list,
             output_dir=output_dir,
             report_path=full_report_path,
-            route_scope_name="Shared MultiDataset Generalization (Full Candidate Set)"
+            route_scope_name="Shared MultiDataset Full Training (Full Candidate Set)"
         )
         all_metrics.extend(full_metrics)
         all_importances.extend(full_importances)
@@ -1366,7 +1340,7 @@ def process_multi_dataset_generalization(
                 pair_output_dir,
                 f"SmartRoute_8Datasets_Global_Pair_Report_{pair_name}.txt"
             )
-            pair_scope_name = f"Shared MultiDataset Pairwise ({pair_list[0]} vs {pair_list[1]})"
+            pair_scope_name = f"Shared MultiDataset Full Training Pairwise ({pair_list[0]} vs {pair_list[1]})"
             pair_metrics, _, pair_importances = train_shared_multi_dataset_generalization_for_candidates(
                 dataset_names=dataset_names,
                 config_name=config_name,
@@ -1533,7 +1507,7 @@ def main():
     if RUN_SINGLE_DATASET_TRAINING:
         print("📦 已启用单数据集训练模式")
     if RUN_MULTI_DATASET_GENERALIZATION:
-        print(f"🌍 已启用 8 数据集共享全局路由训练: {', '.join(GENERALIZATION_TARGET_DATASETS)}")
+        print(f"🌍 已启用 8 数据集全量共享路由训练: {', '.join(GENERALIZATION_TARGET_DATASETS)}")
     if RUN_CROSS_DATASET_HOLDOUT:
         print(f"🧪 已启用 7 训 1 测模式，目标数据集: {', '.join(GENERALIZATION_HOLDOUT_TARGET_DATASETS)}")
 
