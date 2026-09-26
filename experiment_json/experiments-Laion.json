@@ -27,7 +27,7 @@
          },
          "tasks": [
             {
-               "query_dir_name": "query_select_200_C_D-weighted-sub-base-123456789_random_300",
+               "query_dir_name": "query_C_D-weighted-sub-base-123456789",
                "acorn_search_params": {
                   "acorn_efs_start": 10,
                   "acorn_efs_step_slow": 10,
@@ -40,7 +40,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_C_D-weighted-sub-base-123456789_random_300/C_D-weighted-sub-base-123456789_len_large",
+               "query_dir_name": "query_C_D-weighted-sub-base-123456789/C_D-weighted-sub-base-123456789_len_large",
                "acorn_search_params": {
                   "acorn_efs_start": 10,
                   "acorn_efs_step_slow": 10,
@@ -53,7 +53,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_C_D-weighted-sub-base-123456789_random_300/C_D-weighted-sub-base-123456789_len_small",
+               "query_dir_name": "query_C_D-weighted-sub-base-123456789/C_D-weighted-sub-base-123456789_len_small",
                "acorn_search_params": {
                   "acorn_efs_start": 10,
                   "acorn_efs_step_slow": 10,
@@ -66,7 +66,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_C_D-weighted-sub-base-123456789_random_300/C_D-weighted-sub-base-123456789_ppass_large",
+               "query_dir_name": "query_C_D-weighted-sub-base-123456789/C_D-weighted-sub-base-123456789_ppass_large",
                "acorn_search_params": {
                   "acorn_efs_start": 10,
                   "acorn_efs_step_slow": 10,
@@ -79,7 +79,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_C_D-weighted-sub-base-123456789_random_300/C_D-weighted-sub-base-123456789_ppass_small",
+               "query_dir_name": "query_C_D-weighted-sub-base-123456789/C_D-weighted-sub-base-123456789_ppass_small",
                "acorn_search_params": {
                   "acorn_efs_start": 10,
                   "acorn_efs_step_slow": 10,
@@ -120,7 +120,7 @@
          },
          "tasks": [
             {
-               "query_dir_name": "query_select_200_C_D-weighted-sub-base-123456789_random_300/C_D-weighted-sub-base-123456789_len_large",
+               "query_dir_name": "query_C_D-weighted-sub-base-123456789/C_D-weighted-sub-base-123456789_len_large",
                "acorn_search_params": {
                   "acorn_efs_start": 10,
                   "acorn_efs_step_slow": 10,
@@ -132,7 +132,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_C_D-weighted-sub-base-123456789_random_300/C_D-weighted-sub-base-123456789_len_small",
+               "query_dir_name": "query_C_D-weighted-sub-base-123456789/C_D-weighted-sub-base-123456789_len_small",
                "acorn_search_params": {
                   "acorn_efs_start": 10,
                   "acorn_efs_step_slow": 10,
@@ -144,7 +144,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_C_D-weighted-sub-base-123456789_random_300/C_D-weighted-sub-base-123456789_ppass_large",
+               "query_dir_name": "query_C_D-weighted-sub-base-123456789/C_D-weighted-sub-base-123456789_ppass_large",
                "acorn_search_params": {
                   "acorn_efs_start": 10,
                   "acorn_efs_step_slow": 10,
@@ -156,7 +156,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_C_D-weighted-sub-base-123456789_random_300/C_D-weighted-sub-base-123456789_ppass_small",
+               "query_dir_name": "query_C_D-weighted-sub-base-123456789/C_D-weighted-sub-base-123456789_ppass_small",
                "acorn_search_params": {
                   "acorn_efs_start": 10,
                   "acorn_efs_step_slow": 10,
@@ -196,7 +196,7 @@
          },
          "tasks": [
             {
-               "query_dir_name": "query_select_200_C_D-weighted-sub-base-123456789_random_300",
+               "query_dir_name": "query_C_D-weighted-sub-base-123456789",
                "acorn_search_params": {
                   "acorn_efs_start": 100,
                   "acorn_efs_step_slow": 200,
@@ -210,7 +210,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_C_D-weighted-sub-base-123456789_random_300/C_D-weighted-sub-base-123456789_len_large",
+               "query_dir_name": "query_C_D-weighted-sub-base-123456789/C_D-weighted-sub-base-123456789_len_large",
                "acorn_search_params": {
                   "acorn_efs_start": 100,
                   "acorn_efs_step_slow": 200,
@@ -225,7 +225,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_C_D-weighted-sub-base-123456789_random_300/C_D-weighted-sub-base-123456789_len_small",
+               "query_dir_name": "query_C_D-weighted-sub-base-123456789/C_D-weighted-sub-base-123456789_len_small",
                "acorn_search_params": {
                   "acorn_efs_start": 100,
                   "acorn_efs_step_slow": 200,
@@ -240,7 +240,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_C_D-weighted-sub-base-123456789_random_300/C_D-weighted-sub-base-123456789_ppass_large",
+               "query_dir_name": "query_C_D-weighted-sub-base-123456789/C_D-weighted-sub-base-123456789_ppass_large",
                "acorn_search_params": {
                   "acorn_efs_start": 100,
                   "acorn_efs_step_slow": 200,
@@ -255,7 +255,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_C_D-weighted-sub-base-123456789_random_300/C_D-weighted-sub-base-123456789_ppass_small",
+               "query_dir_name": "query_C_D-weighted-sub-base-123456789/C_D-weighted-sub-base-123456789_ppass_small",
                "acorn_search_params": {
                   "acorn_efs_start": 100,
                   "acorn_efs_step_slow": 200,

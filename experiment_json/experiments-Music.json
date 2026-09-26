@@ -27,7 +27,7 @@
          },
          "tasks": [
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300",
+               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789",
                "acorn_search_params": {
                   "acorn_efs_start": 200,
                   "acorn_efs_step_slow": 200,
@@ -70,7 +70,7 @@
          },
          "tasks": [
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300",
+               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789",
                "acorn_search_params": {
                   "acorn_efs_start": 200,
                   "acorn_efs_step_slow": 200,
@@ -110,7 +110,7 @@
          },
          "tasks": [
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300",
+               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789",
                "acorn_search_params": {
                   "acorn_efs_start": 200,
                   "acorn_efs_step_slow": 200,
@@ -123,25 +123,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300/A_B_C-weighted-sub-base-123456789_len_large",
-               "acorn_search_params": {
-                  "acorn_efs_start": 200,
-                  "acorn_efs_step_slow": 200,
-                  "acorn_efs_step_fast": 200
-               },
-               "algorithms": [
-                  "ALPS",
-                  "ALPS+",
-                  "pre-filter",
-                  "Milvus-IVF",
-                  "Milvus-HNSW",
-                  "ACORN-gamma",
-                  "ACORN-1",
-                  "NaviX-ACORN"
-               ]
-            },
-            {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300/A_B_C-weighted-sub-base-123456789_len_small",
+               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_len_large",
                "acorn_search_params": {
                   "acorn_efs_start": 200,
                   "acorn_efs_step_slow": 200,
@@ -159,7 +141,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300/A_B_C-weighted-sub-base-123456789_ppass_large",
+               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_len_small",
                "acorn_search_params": {
                   "acorn_efs_start": 200,
                   "acorn_efs_step_slow": 200,
@@ -177,7 +159,25 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300/A_B_C-weighted-sub-base-123456789_ppass_small",
+               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_ppass_large",
+               "acorn_search_params": {
+                  "acorn_efs_start": 200,
+                  "acorn_efs_step_slow": 200,
+                  "acorn_efs_step_fast": 200
+               },
+               "algorithms": [
+                  "ALPS",
+                  "ALPS+",
+                  "pre-filter",
+                  "Milvus-IVF",
+                  "Milvus-HNSW",
+                  "ACORN-gamma",
+                  "ACORN-1",
+                  "NaviX-ACORN"
+               ]
+            },
+            {
+               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_ppass_small",
                "acorn_search_params": {
                   "acorn_efs_start": 200,
                   "acorn_efs_step_slow": 200,
@@ -223,7 +223,7 @@
          },
          "tasks": [
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300/A_B_C-weighted-sub-base-123456789_len_large",
+               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_len_large",
                "acorn_search_params": {
                   "acorn_efs_start": 200,
                   "acorn_efs_step_slow": 200,
@@ -235,7 +235,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300/A_B_C-weighted-sub-base-123456789_len_small",
+               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_len_small",
                "acorn_search_params": {
                   "acorn_efs_start": 200,
                   "acorn_efs_step_slow": 200,
@@ -247,7 +247,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300/A_B_C-weighted-sub-base-123456789_ppass_large",
+               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_ppass_large",
                "acorn_search_params": {
                   "acorn_efs_start": 200,
                   "acorn_efs_step_slow": 200,
@@ -259,7 +259,7 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300/A_B_C-weighted-sub-base-123456789_ppass_small",
+               "query_dir_name": "query_A_B_C-weighted-sub-base-123456789/A_B_C-weighted-sub-base-123456789_ppass_small",
                "acorn_search_params": {
                   "acorn_efs_start": 200,
                   "acorn_efs_step_slow": 200,

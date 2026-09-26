@@ -1,9 +1,9 @@
 {
    "experiments": [
       {
-         "dataset_name": "VImg",
+         "dataset_name": "Reviews",
          "shared_config": {
-            "data_dir": "/your_path/FilterVector/FilterVectorData/VImg",
+            "data_dir": "/your_path/FilterVector/FilterVectorData/Reviews",
             "output_dir": "/your_path/FilterVector/FilterVectorResults/",
             "build_mode": "serial",
             "max_degree": 32,
@@ -18,7 +18,7 @@
             "K": 10,
             "num_repeats": 1,
             "acorn_params": {
-               "N": 758935,
+               "N": 288065,
                "M": 32,
                "M_beta": 64,
                "gamma": 80,
@@ -27,11 +27,11 @@
          },
          "tasks": [
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300",
+               "query_dir_name": "query_A_B_C-sub-base-123456789",
                "acorn_search_params": {
-                  "acorn_efs_start": 200,
-                  "acorn_efs_step_slow": 200,
-                  "acorn_efs_step_fast": 200
+                  "acorn_efs_start": 100,
+                  "acorn_efs_step_slow": 100,
+                  "acorn_efs_step_fast": 100
                },
                "algorithms": [
                   "ALPS",
@@ -41,9 +41,9 @@
          ]
       },
       {
-         "dataset_name": "VImg",
+         "dataset_name": "Reviews",
          "shared_config": {
-            "data_dir": "/your_path/FilterVector/FilterVectorData/VImg",
+            "data_dir": "/your_path/FilterVector/FilterVectorData/Reviews",
             "output_dir": "/your_path/FilterVector/FilterVectorResults/",
             "build_mode": "serial",
             "max_degree": 32,
@@ -58,7 +58,7 @@
             "K": 10,
             "num_repeats": 1,
             "acorn_params": {
-               "N": 758935,
+               "N": 288065,
                "M": 32,
                "M_beta": 64,
                "gamma": 80,
@@ -67,11 +67,11 @@
          },
          "tasks": [
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300/A_B_C-weighted-sub-base-123456789_len_large",
+               "query_dir_name": "query_A_B_C-sub-base-123456789/A_B_C-sub-base-123456789_len_large",
                "acorn_search_params": {
-                  "acorn_efs_start": 200,
-                  "acorn_efs_step_slow": 200,
-                  "acorn_efs_step_fast": 200
+                  "acorn_efs_start": 100,
+                  "acorn_efs_step_slow": 100,
+                  "acorn_efs_step_fast": 100
                },
                "algorithms": [
                   "ALPS",
@@ -79,11 +79,11 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300/A_B_C-weighted-sub-base-123456789_len_small",
+               "query_dir_name": "query_A_B_C-sub-base-123456789/A_B_C-sub-base-123456789_len_small",
                "acorn_search_params": {
-                  "acorn_efs_start": 200,
-                  "acorn_efs_step_slow": 200,
-                  "acorn_efs_step_fast": 200
+                  "acorn_efs_start": 100,
+                  "acorn_efs_step_slow": 100,
+                  "acorn_efs_step_fast": 100
                },
                "algorithms": [
                   "ALPS",
@@ -91,11 +91,11 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300/A_B_C-weighted-sub-base-123456789_ppass_large",
+               "query_dir_name": "query_A_B_C-sub-base-123456789/A_B_C-sub-base-123456789_ppass_large",
                "acorn_search_params": {
-                  "acorn_efs_start": 200,
-                  "acorn_efs_step_slow": 200,
-                  "acorn_efs_step_fast": 200
+                  "acorn_efs_start": 100,
+                  "acorn_efs_step_slow": 100,
+                  "acorn_efs_step_fast": 100
                },
                "algorithms": [
                   "ALPS",
@@ -103,11 +103,11 @@
                ]
             },
             {
-               "query_dir_name": "query_select_200_A_B_C-weighted-sub-base-123456789_random_300/A_B_C-weighted-sub-base-123456789_ppass_small",
+               "query_dir_name": "query_A_B_C-sub-base-123456789/A_B_C-sub-base-123456789_ppass_small",
                "acorn_search_params": {
-                  "acorn_efs_start": 200,
-                  "acorn_efs_step_slow": 200,
-                  "acorn_efs_step_fast": 200
+                  "acorn_efs_start": 100,
+                  "acorn_efs_step_slow": 100,
+                  "acorn_efs_step_fast": 100
                },
                "algorithms": [
                   "ALPS",
