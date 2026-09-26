@@ -161,3 +161,41 @@ The decision model for intelligent routing is trained using Python scripts:
 
 - **Training**: Use `selector/smart_route_train.py`.
 - **Deployment**: Export the trained model to `.onnx` format and place it in the `SelectModels` directory, where it can be loaded by the C++ `MethodSelector`.
+
+The shared router uses 100% of the valid samples in the training CSVs. Router
+accuracy is not measured on those training samples. Instead, provide a second,
+independent CSV for every dataset. Each evaluation CSV must contain:
+
+- `GlobalPpass`
+- `NumDescendants`
+- `QuerySize`
+- `Target` (the correct routing algorithm name, or its class index)
+
+The evaluation files can be discovered from one root directory using the layout
+`ROOT/FAVOR/DATASET/DATASET_routing_eval.csv`:
+
+```bash
+ALPS_RESULTS_DIR=/results python selector/smart_route_train.py \
+  --configs FAVOR \
+  --eval-data-root /data/routing_eval
+```
+
+Alternatively, provide the eight files explicitly:
+
+```bash
+ALPS_RESULTS_DIR=/results python selector/smart_route_train.py \
+  --configs FAVOR \
+  --eval-files \
+    Amazon=/data/eval/Amazon.csv \
+    BookReviews=/data/eval/BookReviews.csv \
+    Genome=/data/eval/Genome.csv \
+    Music=/data/eval/Music.csv \
+    Reviews=/data/eval/Reviews.csv \
+    Tiktok=/data/eval/Tiktok.csv \
+    VariousImg=/data/eval/VariousImg.csv \
+    Laion=/data/eval/Laion.csv
+```
+
+Use `--eval-label-column COLUMN_NAME` if the correct-route column is not named
+`Target`. The generated report and `fast_all_datasets_metrics.csv` record the
+independent-query accuracy for each dataset separately.
