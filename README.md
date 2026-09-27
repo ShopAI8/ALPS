@@ -14,7 +14,7 @@ Please note that `data` is the default directory for storing datasets. Keep the 
 
 The Genome dataset contains the following files:
 
-1. `*_random_300/`: These directories contain the query files used for testing.
+1. `query*/`: These directories contain the query files used for testing.
 2. `Genome_base_labels.txt`: This file contains the labels corresponding to the base vectors.
 3. `Genome_base.bin`: This binary file contains the base vectors.
 4. `Genome_base.fvecs`: This file stores the base vectors in `fvecs` format.
@@ -48,8 +48,7 @@ cd your_path/ALPS
 docker build --build-arg BUILD_JOBS=8 -t alps:cpu .
 ```
 
-The image supports ALPS, ALPS+, and TFNG. ACORN, NaviX, Curator, and the two
-Milvus/Knowhere baselines are intentionally excluded from this build.
+The image supports ALPS, ALPS+, and TFNG. 
 `BUILD_JOBS` can be reduced when the host has limited memory.
 
 ### 1.2.2 Start the container
@@ -121,17 +120,9 @@ Run the following command to start an experiment:
 ### 3.2 Experiment Workflow
 
 1. **Configuration Parsing**: `exp.sh` reads the `experiments` array from the JSON configuration file.
-2. **Index Construction**: `build_hybrid.sh` is invoked to build indexes. The script supports the `parallel` mode, which builds the UNG and FAVOR indexes simultaneously.
+2. **Index Construction**: `build_hybrid.sh` is invoked to build indexes. The script supports the `parallel` mode, which builds the TFNG and FAVOR-HNSW indexes simultaneously.
 3. **Ground-Truth Generation**: `generate_gt.sh` is invoked to compute the true nearest neighbors, which are used for recall evaluation.
 4. **Search Execution**: `search.sh` is invoked to run the search process. It loads the pretrained ONNX router model for online scheduling.
-
-During UNG/TFNG construction, a trie is used only as temporary working data to
-derive label groups and the label navigation graph (LNG). It is not serialized
-into `index_files/` and is not loaded by TFNG, ALPS, or ALPS+ at query time.
-The label-to-group CRoaring inverted index is persisted separately as
-`index_files/group_attr_roaring_inv.bin` and loaded directly for search. Its
-serialized bytes are included in the reported index size. Older indexes that
-do not contain this file remain supported through an in-memory rebuild.
 
 ---
 
