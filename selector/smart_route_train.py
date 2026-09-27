@@ -979,9 +979,10 @@ def train_cross_dataset_holdout_for_candidates(
     route_scope_name,
     evaluation_root=None,
     evaluation_files=None,
-    evaluation_label_column="Target"
+    evaluation_label_column="Target",
+    model_type=DEFAULT_ROUTER_MODEL
 ):
-    """Train on seven source datasets and evaluate only on an external query task."""
+    """Train a preselected model on seven datasets, then evaluate it externally."""
     if len(aux_dataset_names) == 0:
         print(f"❌ {route_scope_name} 没有可用的训练数据集。")
         return [], [], []
@@ -1020,6 +1021,39 @@ def train_cross_dataset_holdout_for_candidates(
         print(f"❌ {route_scope_name} 没有可用的跨数据集训练样本。")
         return [], [], []
 
+    X_train = pd.concat(train_feature_frames, axis=0, ignore_index=True)
+    y_train = pd.concat(train_target_frames, axis=0, ignore_index=True)
+
+    if y_train.nunique() < 2:
+        print(f"❌ {route_scope_name} 聚合后的训练标签仍然只有一个类别，无法训练。")
+        return [], [], []
+
+    if model_type not in MODELS_TO_TRY:
+        print(f"❌ 预先指定的模型 {model_type} 不在支持列表中: {MODELS_TO_TRY}")
+        return [], [], []
+
+    print(
+        f"\n[{route_scope_name} - Leave-One-Out 训练启动 | "
+        f"预先固定模型: {model_type} | Train: {aux_dataset_names}]"
+    )
+
+    # Fix and fit the model before loading any target evaluation labels. This
+    # prevents the independent test set from influencing model selection.
+    try:
+        fit_result = fit_routing_model(
+            X_train,
+            y_train,
+            target_map,
+            model_type,
+            use_smote=USE_SMOTE
+        )
+    except ImportError:
+        print(f"❌ 缺少预先指定模型 {model_type} 的引擎依赖库。")
+        return [], [], []
+    except Exception as exc:
+        print(f"❌ 预先指定模型 {model_type} 训练失败: {exc}")
+        return [], [], []
+
     eval_df, eval_csv_path = load_external_evaluation_dataframe(
         target_dataset_name,
         config_name,
@@ -1028,9 +1062,6 @@ def train_cross_dataset_holdout_for_candidates(
     )
     if eval_df is None:
         return [], [], []
-
-    X_train = pd.concat(train_feature_frames, axis=0, ignore_index=True)
-    y_train = pd.concat(train_target_frames, axis=0, ignore_index=True)
 
     try:
         prepared_evaluation = prepare_external_routing_evaluation_data(
@@ -1048,56 +1079,22 @@ def train_cross_dataset_holdout_for_candidates(
     y_test = prepared_evaluation["y"]
     y_global_best_test = y_test
 
-    if y_train.nunique() < 2:
-        print(f"❌ {route_scope_name} 聚合后的训练标签仍然只有一个类别，无法训练。")
-        return [], [], []
-
-    print(
-        f"\n[{route_scope_name} - Leave-One-Out 训练启动 | "
-        f"Train: {aux_dataset_names} -> External Query Task: {target_dataset_name}]"
+    evaluation = evaluate_trained_model(
+        X_test,
+        y_test,
+        target_map,
+        fit_result["classifier"],
+        fit_result["real_classes"]
     )
+    res = {**fit_result, **evaluation}
+    strategy_desc = f"Pre-fixed before evaluation ({model_type})"
+    print(f"  > {model_type:<15} | 外部查询任务准确率: {res['acc']:.4%}")
 
-    selection_cache = {}
-    selection_metrics = []
-
-    for model_type in MODELS_TO_TRY:
-        try:
-            final_res = train_and_evaluate_model(
-                X_train,
-                y_train,
-                X_test,
-                y_test,
-                target_map,
-                model_type,
-                use_smote=USE_SMOTE
-            )
-            selection_cache[model_type] = final_res
-            selection_metrics.append({
-                "Model": model_type,
-                "Accuracy": final_res["acc"],
-                "Train_Time_ms": final_res["train_time_ms"],
-                "Pred_Latency_us": final_res["pred_latency_us"],
-                "Test_Size": final_res["test_size"]
-            })
-            print(f"  > {model_type:<15} | 外部查询任务准确率: {final_res['acc']:.4%}")
-        except ImportError:
-            print(f"  > ⚠️ 缺少 {model_type} 引擎依赖库。")
-        except Exception as e:
-            print(f"  > ⚠️ {model_type} 训练失败: {e}")
-
-    if not selection_metrics:
-        print(f"❌ {route_scope_name} 没有成功训练出的模型，跳过。")
-        return [], [], []
-
-    best_model = max(selection_metrics, key=lambda x: x["Accuracy"])["Model"]
-    strategy_desc = "External Query Task Accuracy"
-
-    res = selection_cache[best_model]
     candidate_set_name = " vs ".join(algo_list)
     system_acc = calculate_system_accuracy(X_test, y_global_best_test, res['classifier'], res['real_classes'], target_map)
 
     os.makedirs(output_dir, exist_ok=True)
-    save_onnx_model(res['classifier'], best_model, X_train.shape[1], output_dir, "router.onnx", res['real_classes'])
+    save_onnx_model(res['classifier'], model_type, X_train.shape[1], output_dir, "router.onnx", res['real_classes'])
     save_class_labels(output_dir, algo_list)
 
     with open(report_path, "w", encoding="utf-8") as f:
@@ -1124,7 +1121,7 @@ def train_cross_dataset_holdout_for_candidates(
 
         f.write("【壹 | 测试结果 (External Query Task Evaluation)】\n")
         f.write("-" * 80 + "\n")
-        f.write(f"  ▶ 选定引擎 : {best_model}\n")
+        f.write(f"  ▶ 预先固定引擎 : {model_type}\n")
         f.write(f"  ▶ 候选算法 : {', '.join(algo_list)}\n")
         f.write(
             f"  ▶ 外部查询忽略样本数 : {prepared_evaluation['ignored_count']} / "
@@ -1134,9 +1131,9 @@ def train_cross_dataset_holdout_for_candidates(
         f.write(f"  🚀 外部查询分类准确率: {res['acc']:.4%}\n")
         f.write(f"  🚀 外部查询端到端分发准确率: {system_acc:.4%}\n\n")
 
-        f.write("【贰 | 胜出模型透视 (Selected Model Deep Dive)】\n")
+        f.write("【贰 | 固定模型透视 (Preselected Model Deep Dive)】\n")
         f.write("-" * 80 + "\n")
-        f.write(f"[胜出者: {best_model}]\n")
+        f.write(f"[预先固定模型: {model_type}]\n")
         f.write("  ▶ 详细分类报告:\n  " + res['cls_report'].replace('\n', '\n  ') + "\n")
         f.write("  ▶ 混淆矩阵:\n  " + res['cm_df'].to_string().replace('\n', '\n  ') + "\n\n")
         f.write("  ▶ 特征重要性:\n  " + res['importance_str'].replace('\n', '\n  ') + "\n\n")
@@ -1146,25 +1143,27 @@ def train_cross_dataset_holdout_for_candidates(
         prepared_evaluation["ignored_count"] / prepared_evaluation["total_count"]
         if prepared_evaluation["total_count"] else 0.0
     )
-    for m in selection_metrics:
-        m_copy = m.copy()
-        m_copy.update({
-            "Mode": "CrossDatasetHoldout",
-            "Dataset": target_dataset_name,
-            "Train_Datasets": ",".join(aux_dataset_names),
-            "Config": config_name,
-            "Layer": route_scope_name,
-            "Candidate_Set": candidate_set_name,
-            "Train_Size": len(X_train),
-            "Evaluation_Size": m["Test_Size"],
-            "Evaluation_Scope": "IndependentQueries",
-            "Evaluation_CSV": prepared_evaluation["csv_path"],
-            "Model_Selection": "ExternalQueryAccuracy",
-            "Unknown_Count": prepared_evaluation["ignored_count"],
-            "Unknown_Rate": ignored_rate,
-            "Total_Samples": prepared_evaluation["total_count"]
-        })
-        dataset_metrics.append(m_copy)
+    dataset_metrics.append({
+        "Mode": "CrossDatasetHoldout",
+        "Dataset": target_dataset_name,
+        "Train_Datasets": ",".join(aux_dataset_names),
+        "Config": config_name,
+        "Layer": route_scope_name,
+        "Candidate_Set": candidate_set_name,
+        "Model": model_type,
+        "Accuracy": res["acc"],
+        "Train_Time_ms": res["train_time_ms"],
+        "Pred_Latency_us": res["pred_latency_us"],
+        "Test_Size": res["test_size"],
+        "Train_Size": len(X_train),
+        "Evaluation_Size": res["test_size"],
+        "Evaluation_Scope": "IndependentQueries",
+        "Evaluation_CSV": prepared_evaluation["csv_path"],
+        "Model_Selection": "PreFixedBeforeEvaluation",
+        "Unknown_Count": prepared_evaluation["ignored_count"],
+        "Unknown_Rate": ignored_rate,
+        "Total_Samples": prepared_evaluation["total_count"]
+    })
 
     dataset_metrics.append({
         "Mode": "CrossDatasetHoldout",
@@ -1172,7 +1171,7 @@ def train_cross_dataset_holdout_for_candidates(
         "Train_Datasets": ",".join(aux_dataset_names),
         "Config": config_name,
         "Layer": f"{route_scope_name}_System_End_to_End",
-        "Model": f"CrossDataset({best_model})",
+        "Model": f"CrossDataset({model_type})",
         "Accuracy": system_acc,
         "Train_Time_ms": np.nan,
         "Pred_Latency_us": np.nan,
@@ -1181,7 +1180,7 @@ def train_cross_dataset_holdout_for_candidates(
         "Evaluation_Size": len(y_global_best_test),
         "Evaluation_Scope": "IndependentQueries",
         "Evaluation_CSV": prepared_evaluation["csv_path"],
-        "Model_Selection": "ExternalQueryAccuracy",
+        "Model_Selection": "PreFixedBeforeEvaluation",
         "Candidate_Set": candidate_set_name,
         "Unknown_Count": prepared_evaluation["ignored_count"],
         "Unknown_Rate": ignored_rate,
@@ -1197,7 +1196,7 @@ def train_cross_dataset_holdout_for_candidates(
             "Train_Datasets": ",".join(aux_dataset_names),
             "Config": config_name,
             "Layer": route_scope_name,
-            "Model": best_model,
+            "Model": model_type,
             "Candidate_Set": candidate_set_name
         })
         dataset_importances.append(imp)
@@ -1539,7 +1538,8 @@ def process_cross_dataset_holdout(
     train_pairwise_models=True,
     evaluation_root=None,
     evaluation_files=None,
-    evaluation_label_column="Target"
+    evaluation_label_column="Target",
+    model_type=DEFAULT_ROUTER_MODEL
 ):
     print(f"\n{'='*70}")
     print(
@@ -1583,7 +1583,8 @@ def process_cross_dataset_holdout(
             route_scope_name="CrossDataset Holdout (Full Candidate Set)",
             evaluation_root=evaluation_root,
             evaluation_files=evaluation_files,
-            evaluation_label_column=evaluation_label_column
+            evaluation_label_column=evaluation_label_column,
+            model_type=model_type
         )
         all_metrics.extend(full_metrics)
         all_importances.extend(full_importances)
@@ -1607,7 +1608,8 @@ def process_cross_dataset_holdout(
                 route_scope_name=pair_scope_name,
                 evaluation_root=evaluation_root,
                 evaluation_files=evaluation_files,
-                evaluation_label_column=evaluation_label_column
+                evaluation_label_column=evaluation_label_column,
+                model_type=model_type
             )
             all_metrics.extend(pair_metrics)
             all_importances.extend(pair_importances)
@@ -1816,7 +1818,8 @@ def main():
                     train_pairwise_models=train_pairwise_models,
                     evaluation_root=args.eval_data_root,
                     evaluation_files=evaluation_files,
-                    evaluation_label_column=args.eval_label_column
+                    evaluation_label_column=args.eval_label_column,
+                    model_type=args.model_type
                 )
                 if res:
                     d_metrics, d_ablation, d_importances = res
