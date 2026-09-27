@@ -230,7 +230,7 @@
       },
       {
          "enabled": true,
-         "task_name": "weighted_sub_base_l=9",
+         "task_name": "weighted_sub_base_l=1",
          "mode": "weighted_sub_base",
          "dataset": "Laion",
          "data_dir": "/your_path/FilterVector/FilterVectorData/Laion",
