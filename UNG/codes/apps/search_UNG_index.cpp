@@ -75,7 +75,7 @@ int main(int argc, char **argv)
    bool is_new_method = false;                                 // true: use new method
    bool is_new_trie_method = false, is_rec_more_start = false; // false: original UNG trie method; true: recursive variant. false: default root strategy.
    bool is_ung_more_entry = false;                             // false: original UNG entry-point selection; true: allow more entry points.
-   int baseline_alg = 15; // TFNG; ALPS and ALPS+ use routing modes 1 and 5.
+   int baseline_alg = 15; // 15=TFNG, 17=TFNG-2; ALPS and ALPS+ use routing modes 1 and 5.
    int num_repeats = 1;                                        // Run one repeat by default.
    int routing_mode = 0;                                      // 0: TFNG, 1: ALPS, 5: ALPS+
    int lsearch_start, lsearch_step;
@@ -129,7 +129,7 @@ int main(int argc, char **argv)
                          "is_new_trie_method");
       desc.add_options()("is_rec_more_start", po::value<bool>(&is_rec_more_start)->required(),
                          "is_rec_more_start");
-      desc.add_options()("baseline_alg", po::value<int>(&baseline_alg)->default_value(15), "Algorithm selector used only with routing_mode=0; supported value: 15 (TFNG)");
+      desc.add_options()("baseline_alg", po::value<int>(&baseline_alg)->default_value(15), "Algorithm selector used only with routing_mode=0; supported values: 15 (TFNG), 17 (TFNG-2)");
       desc.add_options()("num_repeats", po::value<int>(&num_repeats)->default_value(1),
                          "Number of repeats for each Lsearch value");
       desc.add_options()("routing_mode", po::value<int>(&routing_mode)->required(),
@@ -164,9 +164,9 @@ int main(int argc, char **argv)
       return -1;
    }
 
-   if (!((routing_mode == 0 && baseline_alg == 15) || routing_mode == 1 || routing_mode == 5))
+   if (!((routing_mode == 0 && (baseline_alg == 15 || baseline_alg == 17)) || routing_mode == 1 || routing_mode == 5))
    {
-      std::cerr << "Unsupported selection. Use TFNG (routing_mode=0, baseline_alg=15), ALPS (routing_mode=1), or ALPS+ (routing_mode=5)." << std::endl;
+      std::cerr << "Unsupported selection. Use TFNG (routing_mode=0, baseline_alg=15), TFNG-2 (routing_mode=0, baseline_alg=17), ALPS (routing_mode=1), or ALPS+ (routing_mode=5)." << std::endl;
       return -1;
    }
 

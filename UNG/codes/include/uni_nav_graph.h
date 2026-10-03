@@ -405,6 +405,11 @@ namespace ANNS
       void get_min_super_sets_sorted_lng(const std::vector<LabelType> &query_label_set,
                                           std::vector<IdxType> &min_super_set_ids,
                                           QueryStats &stats) const;
+      // TFNG-2: mark every direct LNG child of every bitmap-qualified group,
+      // then return the qualified groups that were never marked.
+      void get_min_super_sets_tfng2(const std::vector<LabelType> &query_label_set,
+                                    std::vector<IdxType> &min_super_set_ids,
+                                    QueryStats &stats) const;
 
       void warmup_selectors(uint32_t num_threads);// Warm up selector models to avoid first-query latency.
 

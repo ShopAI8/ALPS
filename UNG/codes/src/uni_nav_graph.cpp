@@ -201,6 +201,7 @@ namespace ANNS
          if (label == "FAVOR" || label == "FAVOR-HNSW") return 12;
          if (label == "FAVOR-adaptive") return 11;
          if (label == "UNG++" || label == "UNG++-sorted-lng") return 15;
+         if (label == "TFNG-2") return 17;
          if (label == "TFNG") return 15;
          if (label == "pre-filter") return 5;
          return -1;
@@ -1540,6 +1541,89 @@ namespace ANNS
          }
          stats.elspp_lng_time += std::chrono::duration<double, std::milli>(
              std::chrono::high_resolution_clock::now() - lng_start).count();
+      }
+      stats.elspp_scan_time = std::chrono::duration<double, std::milli>(
+          std::chrono::high_resolution_clock::now() - scan_start).count();
+      stats.els_M_min = min_super_set_ids.size();
+      stats.elspp_total_time = std::chrono::duration<double, std::milli>(
+          std::chrono::high_resolution_clock::now() - total_start).count();
+   }
+
+   // TFNG-2 exact ELS:
+   //   C(q) = all bitmap-qualified groups;
+   //   ELS(q) = C(q) \ union_{f in C(q)} Child(f).
+   // Every group in the original C(q) must be scanned, even if an earlier
+   // candidate has already marked that group as non-minimal.
+   void UniNavGraph::get_min_super_sets_tfng2(
+       const std::vector<LabelType> &query_label_set,
+       std::vector<IdxType> &min_super_set_ids,
+       QueryStats &stats) const
+   {
+      min_super_set_ids.clear();
+      const auto total_start = std::chrono::high_resolution_clock::now();
+
+      const auto bitmap_start = std::chrono::high_resolution_clock::now();
+      roaring::Roaring candidates;
+      if (query_label_set.empty()) {
+         // The intersection over an empty label set is the universe of groups.
+         candidates.addRange(1, static_cast<uint64_t>(_num_groups) + 1);
+      } else {
+         bool first = true;
+         for (LabelType label : query_label_set) {
+            const auto it = _attr_to_id.find(label);
+            if (it == _attr_to_id.end()) {
+               stats.els_A_all = 0;
+               stats.els_bitmap_time = std::chrono::duration<double, std::milli>(
+                   std::chrono::high_resolution_clock::now() - bitmap_start).count();
+               stats.elspp_total_time = std::chrono::duration<double, std::milli>(
+                   std::chrono::high_resolution_clock::now() - total_start).count();
+               return;
+            }
+            if (first) {
+               candidates = _group_attr_roaring_inv[it->second];
+               first = false;
+            } else {
+               candidates &= _group_attr_roaring_inv[it->second];
+            }
+            if (candidates.isEmpty()) break;
+         }
+      }
+      stats.els_A_all = candidates.cardinality();
+      stats.els_bitmap_time = std::chrono::duration<double, std::milli>(
+          std::chrono::high_resolution_clock::now() - bitmap_start).count();
+
+      const auto scan_start = std::chrono::high_resolution_clock::now();
+      const auto lng_start = scan_start;
+      roaring::Roaring non_minimal;
+      if (_label_nav_graph) {
+         for (uint32_t raw_group_id : candidates) {
+            const IdxType group_id = static_cast<IdxType>(raw_group_id);
+            ++stats.els_scan_count;
+            ++stats.els_lng_nodes;
+            if (group_id >= _label_nav_graph->out_neighbors.size()) continue;
+
+            for (IdxType child : _label_nav_graph->out_neighbors[group_id]) {
+               ++stats.els_lng_edges;
+               ++stats.els_mark_tests;
+               if (non_minimal.contains(static_cast<uint32_t>(child))) {
+                  ++stats.els_duplicate_marks;
+               } else {
+                  non_minimal.add(static_cast<uint32_t>(child));
+                  ++stats.els_new_marks;
+               }
+            }
+         }
+      }
+      stats.elspp_lng_time = std::chrono::duration<double, std::milli>(
+          std::chrono::high_resolution_clock::now() - lng_start).count();
+
+      for (uint32_t raw_group_id : candidates) {
+         if (non_minimal.contains(raw_group_id)) {
+            ++stats.els_skip_count;
+         } else {
+            min_super_set_ids.push_back(static_cast<IdxType>(raw_group_id));
+            ++stats.els_selected_count;
+         }
       }
       stats.elspp_scan_time = std::chrono::duration<double, std::milli>(
           std::chrono::high_resolution_clock::now() - scan_start).count();
@@ -4792,10 +4876,14 @@ void UniNavGraph::calculate_query_features_only(
 
       // --- 模式 0: Baseline ---
       if (routing_mode == 0) {
-         if (baseline_alg == 15) {
+         if (baseline_alg == 15 || baseline_alg == 17) {
                stats.is_trie_recursive = false;
                auto els_start = std::chrono::high_resolution_clock::now();
-               get_min_super_sets_sorted_lng(query_labels, entry_group_ids, stats);
+               if (baseline_alg == 17) {
+                  get_min_super_sets_tfng2(query_labels, entry_group_ids, stats);
+               } else {
+                  get_min_super_sets_sorted_lng(query_labels, entry_group_ids, stats);
+               }
                stats.get_min_super_sets_time_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - els_start).count();
                stats.num_entry_points = entry_group_ids.size();
          }
@@ -5096,8 +5184,12 @@ void UniNavGraph::calculate_query_features_only(
             stats.algo_choice = final_algo_choice;
 
             auto prep_start = std::chrono::high_resolution_clock::now();
-            if (final_algo_choice == 15) {
-               get_min_super_sets_sorted_lng(query_labels, entry_group_ids, stats);
+            if (final_algo_choice == 15 || final_algo_choice == 17) {
+               if (final_algo_choice == 17) {
+                  get_min_super_sets_tfng2(query_labels, entry_group_ids, stats);
+               } else {
+                  get_min_super_sets_sorted_lng(query_labels, entry_group_ids, stats);
+               }
             } else if (final_algo_choice == 5) {
                if (query_labels.empty()) {
                      roar_res.addRange(0, _num_points);
@@ -5204,11 +5296,13 @@ void UniNavGraph::calculate_query_features_only(
             // 2. 数据兜底：由于跳过了 determine_routing_strategy，必须在这里补全后续搜索必需的前置数据
 
             // 兜底 A: 如果被强制分配到 UNG 家族（0, 1, 或 8），但入口点组还没算，需要补算 ELS
-            if ((final_algo_choice == 0 || final_algo_choice == 1 || final_algo_choice == 8 || final_algo_choice == 14 || final_algo_choice == 15) && entry_group_ids.empty()) {
+            if ((final_algo_choice == 0 || final_algo_choice == 1 || final_algo_choice == 8 || final_algo_choice == 14 || final_algo_choice == 15 || final_algo_choice == 17) && entry_group_ids.empty()) {
                bool use_nT_true = (final_algo_choice == 1);
                stats.is_trie_recursive = use_nT_true;
                auto els_start = std::chrono::high_resolution_clock::now();
-               if (final_algo_choice == 15) {
+               if (final_algo_choice == 17) {
+                  get_min_super_sets_tfng2(query_labels, entry_group_ids, stats);
+               } else if (final_algo_choice == 15) {
                   get_min_super_sets_sorted_lng(query_labels, entry_group_ids, stats);
                } else if (final_algo_choice == 14 && !query_labels.empty()) {
                   get_min_super_sets_bitmap(query_labels, entry_group_ids);
@@ -5278,7 +5372,7 @@ void UniNavGraph::calculate_query_features_only(
          // ======================= STAGE 2: EXECUTION STAGE =======================
          
          // Apply entry point expansion logic if needed for the UNG path
-         if (is_ung_more_entry && final_algo_choice == 15)
+         if (is_ung_more_entry && (final_algo_choice == 15 || final_algo_choice == 17))
          {
             IdxType true_group_id = 0;
             if (id < true_query_group_ids.size())
@@ -5703,7 +5797,7 @@ void UniNavGraph::calculate_query_features_only(
             stats.search_time_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - search_time_start_ms).count();
          }
 #endif
-         else if (final_algo_choice == 15)
+         else if (final_algo_choice == 15 || final_algo_choice == 17)
          {
             // --- Execute UNG Search ---
             auto search_time_start_ms = std::chrono::high_resolution_clock::now();
