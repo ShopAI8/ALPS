@@ -141,10 +141,3 @@ The following parameters in the configuration files or scripts determine the beh
 | `efs_start/step` | FAVOR-HNSW search parameters used internally by ALPS. | Controls the internal graph-search breadth; ALPS class 0 defaults to this ef-aligned path. |
 
 ---
-
-### 3.4 Model Training and Deployment
-
-The decision model for intelligent routing is trained using Python scripts:
-
-- **Training**: Use `selector/smart_route_train.py`.
-- **Deployment**: Export the trained model to `.onnx` format and place it in the `SelectModels` directory, where it can be loaded by the C++ `MethodSelector`.
