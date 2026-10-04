@@ -8,9 +8,23 @@ This repository provides **ALPS**, an enhanced implementation for **Filtered App
 
 ### 1.1 Data Preparation
 
-Download the example **Genome** dataset from [Hugging Face](https://huggingface.co/datasets/Paper4Review/SmartRoute_data) into the `data/Genome` directory in advance.
+Download the example **Genome** dataset from [Hugging Face](https://huggingface.co/datasets/Paper4Review/SmartRoute_data) in advance.
 
-Please note that `data` is the default directory for storing datasets. Keep the downloaded Genome files under `data/Genome` using the original directory structure from Hugging Face.
+When running with Docker, the host dataset directory is mounted at `/data` in
+the container. Place the Genome dataset in the following host directory while
+preserving its original directory structure:
+
+```text
+/absolute/path/FilterVectorData/Genome/
+```
+
+The corresponding path inside the container is `/data/Genome/`. The example
+configuration in `experiment_json/experiments-Genome.json` therefore uses
+`/data/Genome` as `data_dir` and `/results` as `output_dir`.
+
+For a local, non-Docker run, the dataset can instead be placed in the
+repository's `data/Genome` directory; update `data_dir` in the experiment
+configuration accordingly.
 
 The Genome dataset contains the following files:
 
@@ -39,7 +53,7 @@ paths selected by ALPS; the experiment entry point exposes only ALPS, ALPS+,
 and TFNG. Dataset files and experiment outputs are kept outside the image.
 
 
-### 1.2.1 Build the image
+#### 1.2.1 Build the image
 
 Run this from the directory containing this README and the Dockerfile:
 
@@ -51,11 +65,14 @@ docker build --build-arg BUILD_JOBS=8 -t alps:cpu .
 The image supports ALPS, ALPS+, and TFNG. 
 `BUILD_JOBS` can be reduced when the host has limited memory.
 
-### 1.2.2 Start the container
+#### 1.2.2 Start the container
 
-Replace the two host paths below with absolute paths:
+Replace the two host paths below with absolute paths. The
+`FilterVectorData` directory must contain the `Genome/` subdirectory described
+in Section 1.1.
 
 ```bash
+mkdir -p /absolute/path/FilterVectorData
 mkdir -p /absolute/path/FilterVectorResults
 docker run --rm -it \
   --name alps-dev \
@@ -69,20 +86,21 @@ Do not mount another directory over `/workspace/ALPS`, because doing so
 would hide the source and binaries built into the image. No `conda activate` is
 needed; the container's Python virtual environment is already on `PATH`.
 
-### 1.2.3 Verify the environment inside the container
+#### 1.2.3 Verify the environment inside the container
 
 ```bash
 python --version
 cmake --version
 python -c "import numpy, pandas, sklearn, xgboost, onnx; print('Python dependencies OK')"
-test -x /opt/alps-build/ung/apps/search_UNG_index
-test -x /opt/alps-build/favor/app/build_index
-echo "C++ binaries OK"
+test -x /opt/alps-build/ung/apps/search_UNG_index \
+&& test -x /opt/alps-build/favor/app/build_index \
+&& echo "C++ binaries OK"
+test -d /data/Genome && echo "Genome data OK"
 ```
 
 
 
-### 2 Repository Structure
+## 2 Repository Structure
 
 The main structure of the repository is as follows:
 
