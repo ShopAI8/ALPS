@@ -421,6 +421,7 @@ int main(int argc, char **argv)
              for (int i = 0; i < (int)num_queries; ++i) {
                  query_stats[repeat][LsearchId][i].mask_gen_time_ms = global_pred_stats[i].mask_gen_time_ms;
                  query_stats[repeat][LsearchId][i].route_pred_time_ms = global_pred_stats[i].route_pred_time_ms;
+                 query_stats[repeat][LsearchId][i].feature_pred_total_time_ms = global_pred_stats[i].feature_pred_total_time_ms;
                  query_stats[repeat][LsearchId][i].global_sort_time_ms = global_pred_stats[i].global_sort_time_ms;
                  query_stats[repeat][LsearchId][i].exact_cand_size = global_pred_stats[i].exact_cand_size;
                  query_stats[repeat][LsearchId][i].global_p_pass = global_pred_stats[i].global_p_pass;
@@ -620,7 +621,7 @@ int main(int argc, char **argv)
               << "MinSupersetT_ms,"
               << "ELS_TrieT_ms,ELS_SortT_ms,ELS_FilterT_ms,ELS_TotalT_ms,"
             //   << "IntelELS_PredT_ms,Route_PredT_ms,FpassT_ms,Routing_TotalT_ms,BitmapT_new_ms,FeatureT_ms," 
-              << "IntelELS_PredT_ms,Route_PredT_ms,Mask_GenT_ms,Global_SortT_ms,FpassT_ms,Routing_TotalT_ms,BitmapT_new_ms,FeatureT_ms,"
+              << "IntelELS_PredT_ms,Route_PredT_ms,Mask_GenT_ms,Global_SortT_ms,FpassT_ms,Routing_TotalT_ms,BitmapT_new_ms,FeatureT_ms,FeaturePredTotalT_ms,"
               << "RabitQ_CtxPrepareT_ms,RabitQ_CtxRotateT_ms,RabitQ_CtxQ2CentroidsT_ms,RabitQ_CtxWrapperT_ms,"
               << "RabitQ_BinT_ms,RabitQ_FullT_ms,RabitQ_BinCalls,RabitQ_FullCalls,RabitQ_CtxReused,"
               << "AcornFilterType,"
@@ -665,6 +666,7 @@ int main(int argc, char **argv)
                        << stats.routing_total_time_ms << ","
                        << stats.bitmap_time_ms << ","
                        << stats.feature_extract_time_ms << ","
+                       << stats.feature_pred_total_time_ms << ","
                        << stats.rabitq_ctx_prepare_time_ms << ","
                        << stats.rabitq_ctx_rotate_time_ms << ","
                        << stats.rabitq_ctx_q2c_time_ms << ","

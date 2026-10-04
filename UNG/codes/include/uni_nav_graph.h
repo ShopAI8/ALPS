@@ -95,6 +95,9 @@ namespace ANNS
     double routing_total_time_ms;        // Total routing-stage time: feature extraction, prediction, and ELS computation.
     double bitmap_time_ms;         
     double feature_extract_time_ms;
+    // Per-query router overhead excluding ELS/search:
+    // bitmap features + remaining feature preparation + Fpass + ONNX prediction.
+    double feature_pred_total_time_ms = 0.0;
 
     int acorn_filter_type = 0; // ACORN mask type: 0=N/A, 1=ELS, 2=ExactMask, 3=InvertedIndex.
 

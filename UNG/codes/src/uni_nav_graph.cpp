@@ -5172,6 +5172,7 @@ void UniNavGraph::calculate_query_features_only(
       roaring::Roaring roar_res; 
       bool has_exact_mask = false;
       stats.bitmap_time_ms = 0.0; 
+      stats.feature_pred_total_time_ms = 0.0;
 
       std::vector<IdxType> entry_group_ids;
       int final_algo_choice = -1;
@@ -5289,6 +5290,18 @@ void UniNavGraph::calculate_query_features_only(
          if (!has_override) {
             // 分支 A：没有预设强制选项，走正常的实时模型预测逻辑
             final_algo_choice = determine_routing_strategy(routing_mode, baseline_alg, query_labels, stats, entry_group_ids, is_new_trie_method, is_rec_more_start);
+
+            // Complete per-query learned-router overhead.  ELS and the selected
+            // ANN search are deliberately excluded.  Feature extraction spans
+            // the exact candidate bitmap above and Fpass/NumDescendants inside
+            // determine_routing_strategy().
+            if (routing_mode >= 1 && routing_mode <= 4) {
+               stats.feature_pred_total_time_ms =
+                   stats.bitmap_time_ms +
+                   stats.feature_extract_time_ms +
+                   stats.fpass_time_ms +
+                   stats.route_pred_time_ms;
+            }
          } else {
             // 分支 B：有强制的 Algo Choice，直接接管
             final_algo_choice = query_algo_choices[id];
@@ -6118,10 +6131,16 @@ void UniNavGraph::calculate_query_features_only(
       }
       double total_pred_time = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - pred_start).count();
          
-      // 平摊推理时间到每个 query 上
-      double avg_pred_time = num_queries > 0 ? (total_pred_time / num_queries) : 0.0;
-      for (int id = 0; id < (int)num_queries; ++id) {
+      // Batch inference covers target_ids only.  This remains an amortized
+      // batch metric, so use the number of queries that actually entered ONNX
+      // rather than all queries as the denominator.
+      double avg_pred_time = !target_ids.empty()
+          ? (total_pred_time / static_cast<double>(target_ids.size()))
+          : 0.0;
+      for (int id : target_ids) {
          out_global_stats[id].route_pred_time_ms = avg_pred_time;
+         out_global_stats[id].feature_pred_total_time_ms =
+             out_global_stats[id].mask_gen_time_ms + avg_pred_time;
       }
 
       std::cout << "[ALPS+] Global Phase completed." << std::endl;
