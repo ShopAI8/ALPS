@@ -431,9 +431,7 @@ def evaluate_trained_model(X_test, y_test, target_map, classifier, real_classes)
     if X_test_clean.empty:
         raise ValueError("测试集没有可评估的有效样本。")
 
-    t_pred_start = time.perf_counter()
     y_pred_np = classifier.predict(X_test_clean.values)
-    pred_latency_us = ((time.perf_counter() - t_pred_start) * 1e6) / len(X_test_clean)
 
     y_pred_abs = np.array([real_classes[int(idx)] for idx in y_pred_np])
     y_test_abs = y_test_clean.values
@@ -458,7 +456,6 @@ def evaluate_trained_model(X_test, y_test, target_map, classifier, real_classes)
 
     return {
         "acc": acc,
-        "pred_latency_us": pred_latency_us,
         "cls_report": cls_report,
         "cm_df": cm_df,
         "test_size": len(X_test_clean)
@@ -499,7 +496,6 @@ def run_arena_for_layer(X_train, y_train, X_test, y_test, target_map, layer_name
                 "Model": model_type,
                 "Accuracy": res['acc'],
                 "Train_Time_ms": res['train_time_ms'],
-                "Pred_Latency_us": res['pred_latency_us'],
                 "Test_Size": res['test_size']
             })
             print(f"  > {model_type:<15} | 准确率: {res['acc']:.4%} | 训练耗时: {res['train_time_ms']:.2f} ms")
@@ -566,14 +562,14 @@ def calculate_system_accuracy(X_test, y_global_best_test, clf, real_classes, tar
 def generate_comparison_table(metrics_list, layer_name, feature_count):
     metrics_list.sort(key=lambda x: x["Accuracy"], reverse=True)
     lines = [f"[{layer_name} - 性能对比 (特征数: {feature_count})]"]
-    lines.append(f"  {'算法模型(Model)':<16} | {'准确率(Accuracy)':<16} | {'训练耗时(Train ms)':<18} | {'单次推理(Pred μs)':<18}")
-    lines.append("  " + "-" * 76)
+    lines.append(f"  {'算法模型(Model)':<16} | {'准确率(Accuracy)':<16} | {'训练耗时(Train ms)':<18}")
+    lines.append("  " + "-" * 55)
     for m in metrics_list:
-        lines.append(f"  {m['Model']:<16} | {m['Accuracy']:<18.4%} | {m['Train_Time_ms']:<18.2f} | {m['Pred_Latency_us']:<18.2f}")
+        lines.append(f"  {m['Model']:<16} | {m['Accuracy']:<18.4%} | {m['Train_Time_ms']:<18.2f}")
     return "\n".join(lines) + "\n"
 
 def build_model_aggregate_summary(df_metrics):
-    metric_cols = ["Accuracy", "Train_Time_ms", "Pred_Latency_us"]
+    metric_cols = ["Accuracy", "Train_Time_ms"]
     if df_metrics.empty or "Model" not in df_metrics.columns:
         return pd.DataFrame(columns=["Mode", "Model"] + [f"{col}_{stat}" for col in metric_cols for stat in ["Sum", "Mean"]])
 
@@ -615,7 +611,7 @@ def write_summary_outputs(global_metrics, global_ablation, global_importances, c
     cols_order = [
         "Mode", "Config", "Dataset", "Train_Datasets", "Layer",
         "Candidate_Set", "Model", "Model_Selection", "Accuracy",
-        "Train_Time_ms", "Pred_Latency_us", "Train_Size", "Test_Size",
+        "Train_Time_ms", "Train_Size", "Test_Size",
         "Evaluation_Size", "Evaluation_Scope", "Evaluation_CSV",
         "Unknown_Count", "Unknown_Rate", "Total_Samples"
     ]
@@ -627,7 +623,7 @@ def write_summary_outputs(global_metrics, global_ablation, global_importances, c
     df_model_agg = build_model_aggregate_summary(df_all)
     csv_model_agg_path = os.path.join(config_summary_dir, "fast_model_aggregate_metrics.csv")
     df_model_agg.to_csv(csv_model_agg_path, index=False)
-    print(f"✅ [全局报表 1.1] 各算法 Accuracy/Train_Time_ms/Pred_Latency_us 的总和与平均值已保存至: {csv_model_agg_path}")
+    print(f"✅ [全局报表 1.1] 各算法 Accuracy/Train_Time_ms 的总和与平均值已保存至: {csv_model_agg_path}")
 
     if global_ablation:
         df_abl = pd.DataFrame(global_ablation)
@@ -764,7 +760,6 @@ def train_routing_model_for_candidates(df, dataset_name, config_name, algo_list,
         "Model": f"Single({best_model})",
         "Accuracy": system_acc,
         "Train_Time_ms": np.nan,
-        "Pred_Latency_us": np.nan,
         "Test_Size": len(y_global_best_test[y_global_best_test != 'Unknown']),
         "Candidate_Set": candidate_set_name,
         "Unknown_Count": unknown_count,
@@ -1153,7 +1148,6 @@ def train_cross_dataset_holdout_for_candidates(
         "Model": model_type,
         "Accuracy": res["acc"],
         "Train_Time_ms": res["train_time_ms"],
-        "Pred_Latency_us": res["pred_latency_us"],
         "Test_Size": res["test_size"],
         "Train_Size": len(X_train),
         "Evaluation_Size": res["test_size"],
@@ -1174,7 +1168,6 @@ def train_cross_dataset_holdout_for_candidates(
         "Model": f"CrossDataset({model_type})",
         "Accuracy": system_acc,
         "Train_Time_ms": np.nan,
-        "Pred_Latency_us": np.nan,
         "Test_Size": len(y_global_best_test[y_global_best_test != 'Unknown']),
         "Train_Size": len(X_train),
         "Evaluation_Size": len(y_global_best_test),
@@ -1425,7 +1418,6 @@ def train_shared_multi_dataset_generalization_for_candidates(
             "Model": model_type,
             "Accuracy": evaluation["acc"],
             "Train_Time_ms": result["train_time_ms"],
-            "Pred_Latency_us": evaluation["pred_latency_us"],
             "Train_Size": len(X_train),
             "Evaluation_Size": evaluation["test_size"]
         })
